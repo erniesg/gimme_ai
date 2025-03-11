@@ -1,0 +1,22 @@
+# gimme_ai/templates/wrangler.toml
+name = "{{ project_name }}"
+main = "worker.js"
+compatibility_date = "2023-05-15"
+
+[[durable_objects.bindings]]
+name = "IP_LIMITER"
+class_name = "IPRateLimiter"
+
+[[durable_objects.bindings]]
+name = "GLOBAL_LIMITER"
+class_name = "GlobalRateLimiter"
+
+[[migrations]]
+tag = "v1"
+new_classes = ["IPRateLimiter", "GlobalRateLimiter"]
+
+{% for key in required_keys %}
+# {{ key }} is available as env.{{ key }}
+{% endfor %}
+
+# {{ admin_password_env }} is available as env.{{ admin_password_env }}

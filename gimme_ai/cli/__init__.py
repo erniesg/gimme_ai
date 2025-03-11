@@ -1,3 +1,6 @@
-from .commands import cli
+# gimme_ai/cli/__init__.py
+"""Command-line interface for gimme_ai."""
 
-__all__ = ["cli"]
+from .commands import cli, init_command, validate_command, deploy_command
+
+__all__ = ["cli", "init_command", "validate_command", "deploy_command"]

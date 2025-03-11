@@ -8,6 +8,14 @@ Secure API gateway management for AI services.
 pip install gimme_ai
 ```
 
+### Additional Dependencies
+
+To deploy your gateway to Cloudflare, you need to install the `wrangler` CLI tool:
+
+```bash
+npm install -g wrangler
+```
+
 ## Quick Start
 
 1. Initialize a new project:

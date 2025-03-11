@@ -227,3 +227,126 @@ def validate_command(config_file: str, env_file: str):
             sys.exit(1)
 
     click.echo("All validations passed successfully!")
+
+@cli.command(name="deploy")
+@click.option(
+    "--config-file",
+    default=".gimme-config.json",
+    help="Path to configuration file",
+    show_default=True,
+)
+@click.option(
+    "--env-file",
+    default=".env",
+    help="Path to environment file",
+    show_default=True,
+)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    help="Generate deployment files without deploying",
+)
+@click.option(
+    "--output-dir",
+    help="Directory for deployment files (default: temporary directory)",
+)
+def deploy_command(config_file: str, env_file: str, dry_run: bool, output_dir: Optional[str] = None):
+    """Deploy your API gateway to Cloudflare."""
+    from ..deploy.cloudflare import generate_deployment_files, deploy_to_cloudflare, check_cloudflare_deps
+
+    # Check if configuration exists
+    if not os.path.exists(config_file):
+        click.echo(f"Error: Configuration file {config_file} not found", err=True)
+        sys.exit(1)
+
+    # Load configuration
+    try:
+        with open(config_file, "r") as f:
+            config_data = json.load(f)
+
+        config = GimmeConfig.from_dict(config_data)
+
+    except Exception as e:
+        click.echo(f"Error loading configuration: {e}", err=True)
+        sys.exit(1)
+
+    # Load environment variables
+    if os.path.exists(env_file):
+        try:
+            env_vars = load_env_file(env_file)
+
+            # Add to environment
+            for key, value in env_vars.items():
+                os.environ[key] = value
+
+        except Exception as e:
+            click.echo(f"Error loading environment: {e}", err=True)
+            sys.exit(1)
+
+    # Validate environment variables
+    missing = validate_env_vars([config.admin_password_env] + config.required_keys)
+    if missing:
+        click.echo("Error: Missing required environment variables:", err=True)
+        for var in missing:
+            click.echo(f"- {var}", err=True)
+        sys.exit(1)
+
+    # Set output directory
+    output_path = None
+    if output_dir:
+        output_path = Path(output_dir)
+        os.makedirs(output_path, exist_ok=True)
+
+    # Check Cloudflare dependencies if not dry run
+    if not dry_run:
+        if not check_cloudflare_deps():
+            click.echo("Cloudflare dependencies not found. Please install wrangler:", err=True)
+            click.echo("npm install -g wrangler", err=True)
+            sys.exit(1)
+
+    # Generate deployment files
+    click.echo("Generating deployment files...")
+    try:
+        deployment_files = generate_deployment_files(config, output_path)
+
+        worker_path = deployment_files.worker_script
+        do_path = deployment_files.durable_objects_script
+        wrangler_path = deployment_files.wrangler_config
+
+        click.echo(f"Worker script generated: {worker_path}")
+        click.echo(f"Durable Objects script generated: {do_path}")
+        click.echo(f"Wrangler config generated: {wrangler_path}")
+
+        # If dry run, exit here
+        if dry_run:
+            click.echo("\nDry run completed. Files generated but not deployed.")
+            return
+
+        # Deploy to Cloudflare
+        click.echo("\nDeploying to Cloudflare...")
+        result = deploy_to_cloudflare(config, deployment_files)
+
+        if result.success:
+            click.echo(f"\n✅ {result.message}")
+            if result.url:
+                click.echo(f"\nYour API gateway is available at: {result.url}")
+                click.echo("\nYou can now use this URL in your frontend applications.")
+
+            # Output usage examples
+            click.echo("\nUsage examples:")
+            click.echo("  Free tier access:")
+            click.echo(f"  fetch('{result.url or 'https://your-gateway.workers.dev'}/your-endpoint')")
+
+            click.echo("\n  Admin access:")
+            click.echo(f"  fetch('{result.url or 'https://your-gateway.workers.dev'}/your-endpoint', {{")
+            click.echo("    headers: {")
+            click.echo("      'Authorization': 'Bearer your-admin-password'")
+            click.echo("    }")
+            click.echo("  })")
+        else:
+            click.echo(f"\n❌ {result.message}", err=True)
+            sys.exit(1)
+
+    except Exception as e:
+        click.echo(f"Error during deployment: {e}", err=True)
+        sys.exit(1)
