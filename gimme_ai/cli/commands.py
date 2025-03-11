@@ -19,17 +19,12 @@ from ..utils.environment import (
 )
 import logging
 from pathlib import Path
-<<<<<<< HEAD
 from ..deploy.cloudflare import generate_deployment_files, deploy_to_cloudflare, check_cloudflare_deps, DeploymentResult
 from ..deploy.templates import (
     generate_worker_script,
     generate_durable_objects_script,
     generate_wrangler_toml
 )
-=======
-from ..deploy.cloudflare import generate_deployment_files, deploy_to_cloudflare, check_cloudflare_deps
-
->>>>>>> 3a36b0e41f6aecc0507b2e5ae8bd45e89d145818
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
