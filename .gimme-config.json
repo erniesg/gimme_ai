@@ -1,8 +1,8 @@
 {
-  "project_name": "test-project",
+  "project_name": "my-project",
   "endpoints": {
     "dev": "http://localhost:8000",
-    "prod": "https://test-project.modal.run"
+    "prod": "https://my-project.modal.run"
   },
   "limits": {
     "free_tier": {
@@ -13,5 +13,6 @@
   "required_keys": [
     "MODAL_TOKEN_ID",
     "MODAL_TOKEN_SECRET"
-  ]
+  ],
+  "output_dir": "output/my-project"
 }

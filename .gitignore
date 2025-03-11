@@ -1,0 +1,10 @@
+# Ignore Python bytecode files
+*.pyc
+
+# Ignore output directory
+output/
+
+# Ignore .python-version file
+.python-version
+
+.env*

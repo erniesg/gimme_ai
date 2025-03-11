@@ -36,14 +36,12 @@ def check_cloudflare_deps() -> bool:
     """
     try:
         # Check if wrangler is installed
-        result = subprocess.run(
-            ["npx", "wrangler", "--version"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            check=False
-        )
-        return result.returncode == 0
-    except Exception:
+        result = subprocess.run(['wrangler', '--version'], capture_output=True, text=True)
+        if result.returncode == 0:
+            return True
+        else:
+            return False
+    except FileNotFoundError:
         return False
 
 def generate_deployment_files(config: GimmeConfig, output_dir: Optional[Path] = None) -> DeploymentResult:

@@ -202,3 +202,5 @@ function handleStatusRequest(env, clientIP, isAdmin) {
     }
   });
 }
+
+export { IPRateLimiter, GlobalRateLimiter };

@@ -63,15 +63,16 @@ def save_template(template_string: str, context: Dict[str, Any], output_path: Un
 
     return Path(output_path)
 
-def generate_worker_script(config: GimmeConfig) -> str:
+def generate_worker_script(config: GimmeConfig, output_dir: Path) -> Path:
     """
     Generate the Cloudflare worker script from configuration.
 
     Args:
         config: The application configuration
+        output_dir: Path to the output directory
 
     Returns:
-        The rendered worker script
+        Path to the saved worker script
     """
     # Load the worker template from the package
     template_path = Path(__file__).parent.parent / "templates" / "worker.js"
@@ -92,17 +93,21 @@ def generate_worker_script(config: GimmeConfig) -> str:
     print(f"Worker template exists: {template_path.exists()}")
 
     # Render the template
-    return render_template(template_string=template, context=context)
+    output_path = output_dir / "worker.js"
+    save_template(template, context, output_path)
+    print(f"Worker script saved to: {output_path}")
+    return output_path
 
-def generate_durable_objects_script(config: GimmeConfig) -> str:
+def generate_durable_objects_script(config: GimmeConfig, output_dir: Path) -> Path:
     """
     Generate the Durable Objects script from configuration.
 
     Args:
         config: The application configuration
+        output_dir: Path to the output directory
 
     Returns:
-        The rendered Durable Objects script
+        Path to the saved Durable Objects script
     """
     # Load the Durable Objects template from the package
     template_path = Path(__file__).parent.parent / "templates" / "durable_objects.js"
@@ -125,7 +130,10 @@ def generate_durable_objects_script(config: GimmeConfig) -> str:
     print(f"DO context: {context}")
 
     # Render the template
-    return render_template(template_string=template, context=context)
+    output_path = output_dir / "durable_objects.js"
+    save_template(template, context, output_path)
+    print(f"Durable Objects script saved to: {output_path}")
+    return output_path
 
 def generate_wrangler_config(config: GimmeConfig) -> Dict[str, Any]:
     """
@@ -171,15 +179,16 @@ def generate_wrangler_config(config: GimmeConfig) -> Dict[str, Any]:
 
     return wrangler_config
 
-def generate_wrangler_toml(config: GimmeConfig) -> str:
+def generate_wrangler_toml(config: GimmeConfig, output_dir: Path) -> Path:
     """
     Generate the wrangler.toml file content from configuration.
 
     Args:
         config: The application configuration
+        output_dir: Path to the output directory
 
     Returns:
-        The rendered wrangler.toml content
+        Path to the saved wrangler.toml file
     """
     # Load the wrangler template from the package
     template_path = Path(__file__).parent.parent / "templates" / "wrangler.toml"
@@ -218,4 +227,7 @@ new_classes = ["IPRateLimiter", "GlobalRateLimiter"]
     }
 
     # Render the template
-    return render_template(template_string=template, context=context)
+    output_path = output_dir / "wrangler.toml"
+    save_template(template, context, output_path)
+    print(f"Wrangler config saved to: {output_path}")
+    return output_path
