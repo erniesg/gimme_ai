@@ -1,0 +1,17 @@
+{
+  "project_name": "test-project",
+  "endpoints": {
+    "dev": "http://localhost:8000",
+    "prod": "https://test-project.modal.run"
+  },
+  "limits": {
+    "free_tier": {
+      "per_ip": 5,
+      "global": 100
+    }
+  },
+  "required_keys": [
+    "MODAL_TOKEN_ID",
+    "MODAL_TOKEN_SECRET"
+  ]
+}
