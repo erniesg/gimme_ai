@@ -17,7 +17,13 @@ from ..utils.environment import (
     validate_env_vars,
     get_env_or_prompt,
 )
+import logging
+from pathlib import Path
+from ..deploy.cloudflare import generate_deployment_files, deploy_to_cloudflare, check_cloudflare_deps
 
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 @click.group()
 @click.version_option()
@@ -104,32 +110,34 @@ def init_command(
         # Update environment variables
         env_vars["GIMME_PROJECT_NAME"] = project_name
 
-        # Ensure admin password is set
-        if "GIMME_ADMIN_PASSWORD" not in env_vars:
-            try:
-                admin_password = get_env_or_prompt(
-                    "GIMME_ADMIN_PASSWORD",
-                    prompt="Enter admin password for your gateway",
-                    default="generate-secure-password"
-                )
-                env_vars["GIMME_ADMIN_PASSWORD"] = admin_password
-            except ImportError as e:
-                click.echo(f"Error: {e}", err=True)
-                click.echo("Please install inquirer: pip install inquirer", err=True)
-                sys.exit(1)
+        # Required environment variables
+        required_env_vars = [
+            "GIMME_ADMIN_PASSWORD",
+            "CLOUDFLARE_API_TOKEN",
+            "MODAL_TOKEN_ID",
+            "MODAL_TOKEN_SECRET"
+        ]
+
+        # Ensure all required environment variables are set
+        for var in required_env_vars:
+            if var not in env_vars:
+                try:
+                    env_vars[var] = get_env_or_prompt(
+                        var,
+                        prompt=f"Enter value for {var}",
+                        default=f"your-{var.lower().replace('_', '-')}-here"
+                    )
+                except ImportError as e:
+                    click.echo(f"Error: {e}", err=True)
+                    click.echo("Please install inquirer: pip install inquirer", err=True)
+                    sys.exit(1)
 
         # Create or update .env file
         save_env_file(env_file, env_vars)
 
         # Create .env.example with required fields
-        example_env = {
-            "GIMME_PROJECT_NAME": project_name,
-            "GIMME_ADMIN_PASSWORD": "your-secure-admin-password"
-        }
-
-        # Add required API keys to example
-        for key in config["required_keys"]:
-            example_env[key] = "your-api-key-here"
+        example_env = {var: f"your-{var.lower().replace('_', '-')}-here" for var in required_env_vars}
+        example_env["GIMME_PROJECT_NAME"] = project_name
 
         save_env_file(f"{env_file}.example", example_env)
 
@@ -250,13 +258,21 @@ def validate_command(config_file: str, env_file: str):
     "--output-dir",
     help="Directory for deployment files (default: temporary directory)",
 )
-def deploy_command(config_file: str, env_file: str, dry_run: bool, output_dir: Optional[str] = None):
+@click.option(
+    "--verbose",
+    is_flag=True,
+    help="Enable verbose output",
+)
+def deploy_command(config_file: str, env_file: str, dry_run: bool, output_dir: Optional[str] = None, verbose: bool = False):
     """Deploy your API gateway to Cloudflare."""
-    from ..deploy.cloudflare import generate_deployment_files, deploy_to_cloudflare, check_cloudflare_deps
+    if verbose:
+        logger.setLevel(logging.DEBUG)
+
+    logger.info("Starting deployment process...")
 
     # Check if configuration exists
     if not os.path.exists(config_file):
-        click.echo(f"Error: Configuration file {config_file} not found", err=True)
+        logger.error(f"Error: Configuration file {config_file} not found")
         sys.exit(1)
 
     # Load configuration
@@ -265,30 +281,32 @@ def deploy_command(config_file: str, env_file: str, dry_run: bool, output_dir: O
             config_data = json.load(f)
 
         config = GimmeConfig.from_dict(config_data)
+        logger.debug(f"Loaded configuration: {config}")
 
     except Exception as e:
-        click.echo(f"Error loading configuration: {e}", err=True)
+        logger.error(f"Error loading configuration: {e}")
         sys.exit(1)
 
     # Load environment variables
     if os.path.exists(env_file):
         try:
             env_vars = load_env_file(env_file)
+            logger.debug(f"Loaded environment variables: {env_vars}")
 
             # Add to environment
             for key, value in env_vars.items():
                 os.environ[key] = value
 
         except Exception as e:
-            click.echo(f"Error loading environment: {e}", err=True)
+            logger.error(f"Error loading environment: {e}")
             sys.exit(1)
 
     # Validate environment variables
     missing = validate_env_vars([config.admin_password_env] + config.required_keys)
     if missing:
-        click.echo("Error: Missing required environment variables:", err=True)
+        logger.error("Error: Missing required environment variables:")
         for var in missing:
-            click.echo(f"- {var}", err=True)
+            logger.error(f"- {var}")
         sys.exit(1)
 
     # Set output directory
@@ -299,13 +317,14 @@ def deploy_command(config_file: str, env_file: str, dry_run: bool, output_dir: O
 
     # Check Cloudflare dependencies if not dry run
     if not dry_run:
+        logger.info("Checking Cloudflare dependencies...")
         if not check_cloudflare_deps():
-            click.echo("Cloudflare dependencies not found. Please install wrangler:", err=True)
-            click.echo("npm install -g wrangler", err=True)
+            logger.error("Cloudflare dependencies not found. Please install wrangler:")
+            logger.error("npm install -g wrangler")
             sys.exit(1)
 
     # Generate deployment files
-    click.echo("Generating deployment files...")
+    logger.info("Generating deployment files...")
     try:
         deployment_files = generate_deployment_files(config, output_path)
 
@@ -313,40 +332,40 @@ def deploy_command(config_file: str, env_file: str, dry_run: bool, output_dir: O
         do_path = deployment_files.durable_objects_script
         wrangler_path = deployment_files.wrangler_config
 
-        click.echo(f"Worker script generated: {worker_path}")
-        click.echo(f"Durable Objects script generated: {do_path}")
-        click.echo(f"Wrangler config generated: {wrangler_path}")
+        logger.info(f"Worker script generated: {worker_path}")
+        logger.info(f"Durable Objects script generated: {do_path}")
+        logger.info(f"Wrangler config generated: {wrangler_path}")
 
         # If dry run, exit here
         if dry_run:
-            click.echo("\nDry run completed. Files generated but not deployed.")
+            logger.info("\nDry run completed. Files generated but not deployed.")
             return
 
         # Deploy to Cloudflare
-        click.echo("\nDeploying to Cloudflare...")
+        logger.info("\nDeploying to Cloudflare...")
         result = deploy_to_cloudflare(config, deployment_files)
 
         if result.success:
-            click.echo(f"\n✅ {result.message}")
+            logger.info(f"\n✅ {result.message}")
             if result.url:
-                click.echo(f"\nYour API gateway is available at: {result.url}")
-                click.echo("\nYou can now use this URL in your frontend applications.")
+                logger.info(f"\nYour API gateway is available at: {result.url}")
+                logger.info("\nYou can now use this URL in your frontend applications.")
 
             # Output usage examples
-            click.echo("\nUsage examples:")
-            click.echo("  Free tier access:")
-            click.echo(f"  fetch('{result.url or 'https://your-gateway.workers.dev'}/your-endpoint')")
+            logger.info("\nUsage examples:")
+            logger.info("  Free tier access:")
+            logger.info(f"  fetch('{result.url or 'https://your-gateway.workers.dev'}/your-endpoint')")
 
-            click.echo("\n  Admin access:")
-            click.echo(f"  fetch('{result.url or 'https://your-gateway.workers.dev'}/your-endpoint', {{")
-            click.echo("    headers: {")
-            click.echo("      'Authorization': 'Bearer your-admin-password'")
-            click.echo("    }")
-            click.echo("  })")
+            logger.info("\n  Admin access:")
+            logger.info(f"  fetch('{result.url or 'https://your-gateway.workers.dev'}/your-endpoint', {{")
+            logger.info("    headers: {")
+            logger.info("      'Authorization': 'Bearer your-admin-password'")
+            logger.info("    }")
+            logger.info("  })")
         else:
-            click.echo(f"\n❌ {result.message}", err=True)
+            logger.error(f"\n❌ {result.message}")
             sys.exit(1)
 
     except Exception as e:
-        click.echo(f"Error during deployment: {e}", err=True)
+        logger.error(f"Error during deployment: {e}")
         sys.exit(1)
