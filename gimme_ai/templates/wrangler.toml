@@ -15,6 +15,12 @@ class_name = "GlobalRateLimiter"
 tag = "v1"
 new_classes = ["IPRateLimiter", "GlobalRateLimiter"]
 
+[vars]
+{% for key in required_keys %}
+{{ key }} = "${{ key }}"
+{% endfor %}
+{{ admin_password_env }} = "${{ admin_password_env }}"
+
 {% for key in required_keys %}
 # {{ key }} is available as env.{{ key }}
 {% endfor %}
