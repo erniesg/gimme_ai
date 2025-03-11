@@ -1,6 +1,6 @@
 // Main Worker Script for API Gateway
 // Handles authentication, rate limiting, and request forwarding
-
+import { IPRateLimiter, GlobalRateLimiter } from './durable_objects.js';
 // Configuration
 const DEV_ENDPOINT = "{{ dev_endpoint }}";
 const PROD_ENDPOINT = "{{ prod_endpoint }}";
