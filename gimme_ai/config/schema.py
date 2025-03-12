@@ -76,20 +76,41 @@ class GimmeConfig(BaseModel):
 
 
 def create_default_config(project_name: str) -> Dict[str, Any]:
-    """Create a default configuration dictionary."""
+    """Create a default configuration dictionary with sensible defaults.
+
+    Args:
+        project_name: Name of the project, used for endpoints and deployment
+
+    Returns:
+        Dictionary containing the default configuration
+    """
+    # Sanitize project name for use in URLs and identifiers
+    safe_project_name = project_name.lower().replace('_', '-').replace(' ', '-')
+
     return {
-        "project_name": project_name,
+        "project_name": safe_project_name,
+        "output_dir": f"output/{safe_project_name}",  # Consistent output directory
         "endpoints": {
-            "dev": "http://localhost:8000",
-            "prod": f"https://{project_name}.modal.run"
+            "dev": "http://localhost:8000",  # Default local development endpoint
+            "prod": f"https://{safe_project_name}.modal.run"  # Default production endpoint using project name
         },
         "limits": {
-            "free_tier": {"per_ip": 5, "global": 100}
+            "free_tier": {
+                "per_ip": 10,
+                "global": 100,
+                "rate_window": "lifetime"
+            }
         },
         "required_keys": [
             "MODAL_TOKEN_ID",
             "MODAL_TOKEN_SECRET"
-        ]
+        ],
+        "admin_password_env": "GIMME_ADMIN_PASSWORD",
+        "cors": {
+            "allowed_origins": ["*"],  # Default to allow all origins
+            "allowed_methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+            "allowed_headers": ["Content-Type", "Authorization"]
+        }
     }
 
 

@@ -32,12 +32,39 @@ export default {
 
     // Check authentication mode
     const authHeader = request.headers.get('Authorization') || '';
-    const isAdmin = authHeader.startsWith('Bearer ') &&
-                    authHeader.substring(7) === env[ADMIN_PASSWORD_ENV];
+    let isAdmin = false;
+    let authError = null;
+
+    if (authHeader.startsWith('Bearer ')) {
+      const token = authHeader.substring(7);
+      // Check if token matches admin password
+      if (token === env[ADMIN_PASSWORD_ENV]) {
+        isAdmin = true;
+      } else {
+        // Invalid token provided
+        authError = "Invalid authentication token";
+      }
+    }
 
     // Handle status endpoint
     if (path === "/status" || path === "/api/status") {
       return handleStatusRequest(env, clientIP, isAdmin);
+    }
+
+    // If auth error and auth was attempted, return error
+    if (authError && authHeader) {
+      return new Response(JSON.stringify({
+        error: "Authentication failed",
+        message: authError,
+        status: 401
+      }), {
+        status: 401,
+        headers: {
+          "Content-Type": "application/json",
+          "Access-Control-Allow-Origin": "*",
+          "WWW-Authenticate": "Bearer"
+        }
+      });
     }
 
     // For admin mode, bypass rate limiting
@@ -96,6 +123,8 @@ async function handleAdminRequest(request, backendUrl, env) {
 
     // Add auth state to headers
     backendRequest.headers.set('X-Auth-Mode', 'admin');
+    backendRequest.headers.set('X-Auth-Source', 'gimme-ai-gateway');
+    backendRequest.headers.set('X-Project-Name', PROJECT_NAME);
 
     // Add API keys as headers - they are pulled from the env
     {% for key in required_keys %}
@@ -108,6 +137,7 @@ async function handleAdminRequest(request, backendUrl, env) {
     // Clone the response to add CORS headers
     const corsResponse = new Response(response.body, response);
     corsResponse.headers.set('Access-Control-Allow-Origin', '*');
+    corsResponse.headers.set('X-Powered-By', 'Gimme-AI Gateway');
 
     return corsResponse;
   } catch (error) {
@@ -140,6 +170,8 @@ async function handleFreeRequest(request, backendUrl, env) {
 
     // Add auth state to headers
     backendRequest.headers.set('X-Auth-Mode', 'free');
+    backendRequest.headers.set('X-Auth-Source', 'gimme-ai-gateway');
+    backendRequest.headers.set('X-Project-Name', PROJECT_NAME);
 
     // Add API keys as headers - they are pulled from the env
     {% for key in required_keys %}
@@ -152,6 +184,7 @@ async function handleFreeRequest(request, backendUrl, env) {
     // Clone the response to add CORS headers
     const corsResponse = new Response(response.body, response);
     corsResponse.headers.set('Access-Control-Allow-Origin', '*');
+    corsResponse.headers.set('X-Powered-By', 'Gimme-AI Gateway');
 
     return corsResponse;
   } catch (error) {
@@ -189,7 +222,7 @@ function handleStatusRequest(env, clientIP, isAdmin) {
 
   return new Response(JSON.stringify({
     status: "online",
-    project: "{{ project_name }}",
+    project: PROJECT_NAME,
     mode: mode,
     rate_limit: limit,
     client_ip: clientIP,
@@ -198,7 +231,8 @@ function handleStatusRequest(env, clientIP, isAdmin) {
     status: 200,
     headers: {
       "Content-Type": "application/json",
-      "Access-Control-Allow-Origin": "*"
+      "Access-Control-Allow-Origin": "*",
+      "X-Powered-By": "Gimme-AI Gateway"
     }
   });
 }

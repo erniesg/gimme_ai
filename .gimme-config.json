@@ -1,8 +1,8 @@
 {
-  "project_name": "test-project",
+  "project_name": "gimme-ai-test",
   "endpoints": {
     "dev": "http://localhost:8000",
-    "prod": "https://test-project.modal.run"
+    "prod": "https://gimme-ai-test.modal.run"
   },
   "limits": {
     "free_tier": {

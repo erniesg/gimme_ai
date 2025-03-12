@@ -6,6 +6,7 @@ export class IPRateLimiter {
     this.storage = state.storage;
     this.env = env;
     this.limit = {{ limits.free_tier.per_ip }};
+    this.rateWindow = "{{ limits.free_tier.rate_window }}";
   }
 
   async fetch(request) {
@@ -18,6 +19,7 @@ export class IPRateLimiter {
         error: "Rate limit exceeded",
         limit: this.limit,
         type: "per_ip",
+        window: this.rateWindow,
         message: "You have exceeded the per-IP rate limit for the free tier"
       }), {
         status: 429,
@@ -26,6 +28,7 @@ export class IPRateLimiter {
           "X-RateLimit-Limit": this.limit,
           "X-RateLimit-Remaining": 0,
           "X-RateLimit-Reset": "n/a",
+          "X-RateLimit-Window": this.rateWindow,
           "Access-Control-Allow-Origin": "*",
           "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
           "Access-Control-Allow-Headers": "Content-Type, Authorization"
@@ -42,6 +45,7 @@ export class IPRateLimiter {
       used: count + 1,
       remaining: this.limit - (count + 1),
       limit: this.limit,
+      window: this.rateWindow,
       type: "per_ip"
     }), {
       status: 200,
@@ -49,6 +53,7 @@ export class IPRateLimiter {
         "Content-Type": "application/json",
         "X-RateLimit-Limit": this.limit,
         "X-RateLimit-Remaining": this.limit - (count + 1),
+        "X-RateLimit-Window": this.rateWindow,
         "Access-Control-Allow-Origin": "*",
         "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
         "Access-Control-Allow-Headers": "Content-Type, Authorization"
@@ -63,6 +68,7 @@ export class GlobalRateLimiter {
     this.storage = state.storage;
     this.env = env;
     this.limit = {{ limits.free_tier.global }};
+    this.rateWindow = "{{ limits.free_tier.rate_window }}";
   }
 
   async fetch(request) {
@@ -75,6 +81,7 @@ export class GlobalRateLimiter {
         error: "Global rate limit exceeded",
         limit: this.limit,
         type: "global",
+        window: this.rateWindow,
         message: "The free tier global rate limit has been reached"
       }), {
         status: 429,
@@ -83,6 +90,7 @@ export class GlobalRateLimiter {
           "X-RateLimit-Limit": this.limit,
           "X-RateLimit-Remaining": 0,
           "X-RateLimit-Reset": "n/a",
+          "X-RateLimit-Window": this.rateWindow,
           "Access-Control-Allow-Origin": "*",
           "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
           "Access-Control-Allow-Headers": "Content-Type, Authorization"
@@ -99,6 +107,7 @@ export class GlobalRateLimiter {
       used: count + 1,
       remaining: this.limit - (count + 1),
       limit: this.limit,
+      window: this.rateWindow,
       type: "global"
     }), {
       status: 200,
@@ -106,6 +115,7 @@ export class GlobalRateLimiter {
         "Content-Type": "application/json",
         "X-RateLimit-Limit": this.limit,
         "X-RateLimit-Remaining": this.limit - (count + 1),
+        "X-RateLimit-Window": this.rateWindow,
         "Access-Control-Allow-Origin": "*",
         "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
         "Access-Control-Allow-Headers": "Content-Type, Authorization"
