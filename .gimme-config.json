@@ -1,17 +1,36 @@
 {
   "project_name": "gimme-ai-test",
+  "output_dir": "output/gimme-ai-test",
   "endpoints": {
     "dev": "http://localhost:8000",
     "prod": "https://gimme-ai-test.modal.run"
   },
   "limits": {
     "free_tier": {
-      "per_ip": 5,
-      "global": 100
+      "per_ip": 10,
+      "global": 100,
+      "rate_window": "lifetime"
     }
   },
   "required_keys": [
     "MODAL_TOKEN_ID",
     "MODAL_TOKEN_SECRET"
-  ]
+  ],
+  "admin_password_env": "GIMME_ADMIN_PASSWORD",
+  "cors": {
+    "allowed_origins": [
+      "*"
+    ],
+    "allowed_methods": [
+      "GET",
+      "POST",
+      "PUT",
+      "DELETE",
+      "OPTIONS"
+    ],
+    "allowed_headers": [
+      "Content-Type",
+      "Authorization"
+    ]
+  }
 }
