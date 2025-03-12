@@ -8,3 +8,5 @@ output/
 .python-version
 
 .env*
+
+__pycache__/

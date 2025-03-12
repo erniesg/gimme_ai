@@ -67,7 +67,7 @@ export class GlobalRateLimiter {
     this.state = state;
     this.storage = state.storage;
     this.env = env;
-    this.limit = {{ limits.free_tier.global }};
+    this.limit = {{ limits.free_tier.global_limit }};
     this.rateWindow = "{{ limits.free_tier.rate_window }}";
   }
 

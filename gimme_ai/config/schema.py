@@ -9,8 +9,20 @@ class RateLimits(BaseModel):
     """Rate limit configuration."""
 
     per_ip: int = Field(5, description="Requests per IP address")
-    global_limit: int = Field(100, description="Global request limit")
+    global_limit: int = Field(100, description="Global request limit", alias="global")
     rate_window: str = Field("lifetime", description="Rate limit window")
+
+    # Allow "global" as an alias for "global_limit"
+    @field_validator('global_limit', mode='before')
+    @classmethod
+    def handle_global_alias(cls, v, info):
+        # If we're validating the whole model and "global" is in the data
+        if hasattr(info, 'data') and 'global' in info.data:
+            return info.data.pop('global')  # Use "global" value and remove it from data
+        return v
+
+    class Config:
+        populate_by_name = True  # Allow populating by alias or actual field name
 
 
 class Endpoints(BaseModel):
@@ -55,7 +67,15 @@ class GimmeConfig(BaseModel):
         if "limits" in data and isinstance(data["limits"], dict):
             for tier, limits in data["limits"].items():
                 if isinstance(limits, dict) and not isinstance(limits, RateLimits):
+                    # Handle field name mapping for global limit
+                    if "global" in limits and "global_limit" not in limits:
+                        # Keep both for compatibility, but prefer global_limit for internal use
+                        limits["global_limit"] = limits["global"]
+
                     data["limits"][tier] = RateLimits(**limits)
+
+                    # Debug output to verify the limits
+                    print(f"Parsed limits for {tier}: {data['limits'][tier]}")
 
         # Transform endpoints if needed
         if "endpoints" in data and isinstance(data["endpoints"], dict):

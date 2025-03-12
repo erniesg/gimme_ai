@@ -98,42 +98,44 @@ def generate_worker_script(config: GimmeConfig, output_dir: Path) -> Path:
     print(f"Worker script saved to: {output_path}")
     return output_path
 
-def generate_durable_objects_script(config: GimmeConfig, output_dir: Path) -> Path:
-    """
-    Generate the Durable Objects script from configuration.
-
-    Args:
-        config: The application configuration
-        output_dir: Path to the output directory
-
-    Returns:
-        Path to the saved Durable Objects script
-    """
-    # Load the Durable Objects template from the package
+def generate_durable_objects_script(config: GimmeConfig, output_dir: Optional[Path] = None) -> Path:
+    """Generate the Durable Objects script."""
+    # Load template
     template_path = Path(__file__).parent.parent / "templates" / "durable_objects.js"
     template = load_template(template_path)
 
-    # Create the context for rendering
+    # Extract limits from config
+    limits = {}
+    if hasattr(config, 'limits') and config.limits:
+        limits = config.limits
+
+        # Debug the actual values to ensure they're correct
+        if 'free_tier' in limits:
+            free_tier = limits['free_tier']
+            if hasattr(free_tier, 'global_limit'):
+                print(f"Global limit value: {free_tier.global_limit}")
+
+    # Ensure we have the complete limits structure
     context = {
         "project_name": config.project_name,
-        "limits": {
-            "free_tier": {
-                "per_ip": config.limits["free_tier"].per_ip,
-                "global": config.limits["free_tier"].global_limit
-            }
-        }
+        "limits": limits
     }
 
-    # Print debug info
-    print(f"DO template path: {template_path}")
-    print(f"DO template exists: {template_path.exists()}")
-    print(f"DO context: {context}")
+    # Debug output to verify the context
+    print(f"Durable Objects template context: {context}")
 
-    # Render the template
-    output_path = output_dir / "durable_objects.js"
-    save_template(template, context, output_path)
-    print(f"Durable Objects script saved to: {output_path}")
-    return output_path
+    # Render template
+    script = render_template(template, context)
+
+    # Save to file if output_dir provided
+    if output_dir:
+        os.makedirs(output_dir, exist_ok=True)
+        script_path = output_dir / "durable_objects.js"
+        with open(script_path, "w") as f:
+            f.write(script)
+        return script_path
+
+    return script
 
 def generate_wrangler_config(config: GimmeConfig) -> Dict[str, Any]:
     """
