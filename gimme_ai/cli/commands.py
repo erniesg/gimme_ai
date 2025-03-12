@@ -430,13 +430,43 @@ def deploy_command(config_file: str, env_file: str, dry_run: bool, output_dir: O
     show_default=True,
 )
 @click.option(
+    "--config-file",
+    default=".gimme-config.json",
+    help="Path to configuration file",
+    show_default=True,
+)
+@click.option(
     "--verbose",
     is_flag=True,
     help="Show detailed test output",
 )
-def test_command(endpoint: str, admin_password: Optional[str], env_file: str, verbose: bool):
+def test_command(endpoint: str, admin_password: Optional[str], env_file: str, config_file: str, verbose: bool):
     """Test your deployed API gateway."""
     click.echo("🧪 Testing your API gateway...")
+
+    # Load configuration if available
+    config = None
+    per_ip_limit = 10  # Default if config not available
+    global_limit = 100  # Default if config not available
+    try:
+        if os.path.exists(config_file):
+            with open(config_file, "r") as f:
+                config_data = json.load(f)
+
+            # Extract rate limits from config
+            if "limits" in config_data and "free_tier" in config_data["limits"]:
+                free_tier = config_data["limits"]["free_tier"]
+                if isinstance(free_tier, dict):
+                    if "per_ip" in free_tier:
+                        per_ip_limit = free_tier["per_ip"]
+                        click.echo(f"Using per-IP rate limit from config: {per_ip_limit}")
+
+                    if "global" in free_tier:
+                        global_limit = free_tier["global"]
+                        click.echo(f"Using global rate limit from config: {global_limit}")
+    except Exception as e:
+        click.echo(f"Warning: Could not load configuration: {e}", err=True)
+        click.echo("Using default rate limits: 10 per IP, 100 global")
 
     # Load admin password from env file if not provided
     if not admin_password and os.path.exists(env_file):
@@ -481,6 +511,10 @@ def test_command(endpoint: str, admin_password: Optional[str], env_file: str, ve
         if response.status_code in [200, 404]:  # 404 is ok if endpoint doesn't exist
             click.echo(f"✅ Free tier access: {response.status_code}")
             results.append(["Free Tier Access", "✅ PASS", response.status_code])
+        elif response.status_code == 429:
+            # Rate limit already reached - this is expected with lifetime limits
+            click.echo("⚠️ Free tier already rate limited (expected with lifetime limits)")
+            results.append(["Free Tier Access", "⚠️ EXPECTED", response.status_code])
         else:
             click.echo(f"❌ Free tier access failed: {response.status_code}")
             results.append(["Free Tier Access", "❌ FAIL", response.status_code])
@@ -528,27 +562,88 @@ def test_command(endpoint: str, admin_password: Optional[str], env_file: str, ve
         click.echo("\n⚠️ Skipping admin password test (no password provided)")
         results.append(["Admin Auth", "⚠️ SKIPPED", "N/A"])
 
-    # Test 5: Rate limiting
-    click.echo("\n🔍 Testing rate limiting...")
+    # Test 5: Per-IP Rate limiting
+    click.echo("\n🔍 Testing per-IP rate limiting...")
     try:
         # Make multiple requests to trigger rate limiting
         rate_limit_hit = False
-        for i in range(12):  # Try more than the default limit
+        # Use per_ip_limit + 2 to ensure we exceed the limit
+        for i in range(per_ip_limit + 2):
             response = requests.get(f"{endpoint}/api/test")
             if response.status_code == 429:
                 rate_limit_hit = True
-                click.echo(f"✅ Rate limit triggered after {i+1} requests")
+                click.echo(f"✅ Per-IP rate limit triggered after {i+1} requests")
+
+                # Check if the response indicates which type of rate limit was hit
+                if verbose and response.headers.get('Content-Type', '').startswith('application/json'):
+                    try:
+                        data = response.json()
+                        limit_type = data.get('type', 'unknown')
+                        click.echo(f"   Rate limit type: {limit_type}")
+                    except:
+                        pass
+
                 break
             time.sleep(0.1)  # Small delay to avoid overwhelming the server
 
         if rate_limit_hit:
-            results.append(["Rate Limiting", "✅ PASS", 429])
+            results.append(["Per-IP Rate Limiting", "✅ PASS", 429])
         else:
-            click.echo("⚠️ Rate limit not triggered (might be higher than expected)")
-            results.append(["Rate Limiting", "⚠️ WARNING", "Not triggered"])
+            click.echo("⚠️ Per-IP rate limit not triggered (might be higher than expected)")
+            results.append(["Per-IP Rate Limiting", "⚠️ WARNING", "Not triggered"])
     except Exception as e:
-        click.echo(f"❌ Error testing rate limiting: {e}")
-        results.append(["Rate Limiting", "❌ ERROR", str(e)])
+        click.echo(f"❌ Error testing per-IP rate limiting: {e}")
+        results.append(["Per-IP Rate Limiting", "❌ ERROR", str(e)])
+
+    # Test 6: Global Rate limiting
+    click.echo("\n🔍 Testing global rate limiting...")
+    try:
+        # For global rate limiting, we need to make many non-admin requests
+        # Note: This might be difficult to trigger in a single test session
+        click.echo(f"ℹ️ Attempting to trigger global rate limit (limit: {global_limit})")
+        click.echo("   This test may not trigger the limit in a single session.")
+
+        # Try to make enough requests to potentially hit the global limit
+        # We'll use a smaller number to avoid overwhelming the server
+        test_requests = min(20, global_limit // 5)
+        global_limit_hit = False
+
+        for i in range(test_requests):
+            # Use a unique query parameter to avoid caching
+            response = requests.get(f"{endpoint}/api/test?global_test={i}")
+
+            if response.status_code == 429:
+                # Check if it's a global limit
+                is_global = False
+                if response.headers.get('Content-Type', '').startswith('application/json'):
+                    try:
+                        data = response.json()
+                        if data.get('type') == 'global':
+                            is_global = True
+                    except:
+                        pass
+
+                if is_global:
+                    global_limit_hit = True
+                    click.echo(f"✅ Global rate limit triggered after {i+1} requests")
+                    break
+                else:
+                    # Likely hit the per-IP limit instead
+                    click.echo("ℹ️ Hit rate limit, but it appears to be the per-IP limit, not global")
+                    break
+
+            time.sleep(0.1)  # Small delay to avoid overwhelming the server
+
+        if global_limit_hit:
+            results.append(["Global Rate Limiting", "✅ PASS", 429])
+        else:
+            click.echo("ℹ️ Global rate limit not triggered (this is normal in most test scenarios)")
+            click.echo("   Global limits are designed to limit total usage across all users and may")
+            click.echo("   only be reached in production with multiple users.")
+            results.append(["Global Rate Limiting", "ℹ️ INFO", "Not triggered"])
+    except Exception as e:
+        click.echo(f"❌ Error testing global rate limiting: {e}")
+        results.append(["Global Rate Limiting", "❌ ERROR", str(e)])
 
     # Summary
     click.echo("\n📊 Test Summary:")
