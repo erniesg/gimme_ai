@@ -11,10 +11,40 @@ export class IPRateLimiter {
 
   async fetch(request) {
     const url = new URL(request.url);
+
+    // Add reset functionality
+    if (url.pathname === "/reset") {
+      await this.storage.delete("count");
+      console.log({
+        event: "rate_limit_reset",
+        type: "per_ip",
+        ip: url.hostname,
+        timestamp: new Date().toISOString()
+      });
+      return new Response(JSON.stringify({
+        success: true,
+        message: "IP rate limiter reset successfully"
+      }), {
+        status: 200,
+        headers: {
+          "Content-Type": "application/json",
+          "Access-Control-Allow-Origin": "*"
+        }
+      });
+    }
+
     const count = await this.storage.get("count") || 0;
 
     // Check if the limit has been reached
     if (count >= this.limit) {
+      console.log({
+        event: "rate_limit_exceeded",
+        type: "per_ip",
+        ip: url.hostname,
+        count: count,
+        limit: this.limit,
+        timestamp: new Date().toISOString()
+      });
       return new Response(JSON.stringify({
         error: "Rate limit exceeded",
         limit: this.limit,
@@ -38,6 +68,15 @@ export class IPRateLimiter {
 
     // Increment the counter
     await this.storage.put("count", count + 1);
+    console.log({
+      event: "rate_limit_increment",
+      type: "per_ip",
+      ip: url.hostname,
+      count: count + 1,
+      limit: this.limit,
+      remaining: this.limit - (count + 1),
+      timestamp: new Date().toISOString()
+    });
 
     // Return success
     return new Response(JSON.stringify({
@@ -73,10 +112,38 @@ export class GlobalRateLimiter {
 
   async fetch(request) {
     const url = new URL(request.url);
+
+    // Add reset functionality
+    if (url.pathname === "/reset") {
+      await this.storage.delete("count");
+      console.log({
+        event: "rate_limit_reset",
+        type: "global",
+        timestamp: new Date().toISOString()
+      });
+      return new Response(JSON.stringify({
+        success: true,
+        message: "Global rate limiter reset successfully"
+      }), {
+        status: 200,
+        headers: {
+          "Content-Type": "application/json",
+          "Access-Control-Allow-Origin": "*"
+        }
+      });
+    }
+
     const count = await this.storage.get("count") || 0;
 
     // Check if the limit has been reached
     if (count >= this.limit) {
+      console.log({
+        event: "rate_limit_exceeded",
+        type: "global",
+        count: count,
+        limit: this.limit,
+        timestamp: new Date().toISOString()
+      });
       return new Response(JSON.stringify({
         error: "Global rate limit exceeded",
         limit: this.limit,
@@ -100,6 +167,14 @@ export class GlobalRateLimiter {
 
     // Increment the counter
     await this.storage.put("count", count + 1);
+    console.log({
+      event: "rate_limit_increment",
+      type: "global",
+      count: count + 1,
+      limit: this.limit,
+      remaining: this.limit - (count + 1),
+      timestamp: new Date().toISOString()
+    });
 
     // Return success
     return new Response(JSON.stringify({

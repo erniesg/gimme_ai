@@ -32,5 +32,12 @@
       "Content-Type",
       "Authorization"
     ]
+  },
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1.0,
+    "logs": {
+      "invocation_logs": true
+    }
   }
 }

@@ -440,7 +440,13 @@ def deploy_command(config_file: str, env_file: str, dry_run: bool, output_dir: O
     is_flag=True,
     help="Show detailed test output",
 )
-def test_command(endpoint: str, admin_password: Optional[str], env_file: str, config_file: str, verbose: bool):
+@click.option(
+    "--skip-reset-confirm",
+    is_flag=True,
+    help="Skip confirmation for rate limit resets",
+)
+def test_command(endpoint: str, admin_password: Optional[str], env_file: str, config_file: str,
+                verbose: bool, skip_reset_confirm: bool):
     """Test your deployed API gateway."""
     click.echo("🧪 Testing your API gateway...")
 
@@ -481,6 +487,40 @@ def test_command(endpoint: str, admin_password: Optional[str], env_file: str, co
     # Normalize endpoint URL
     if endpoint.endswith('/'):
         endpoint = endpoint[:-1]
+
+    # Reset rate limits if admin password is available
+    if admin_password:
+        click.echo("\n🔄 Rate limits reset:")
+        click.echo("ℹ️ Testing will reset rate limits on your API gateway.")
+        click.echo("ℹ️ This will clear any existing rate limit counters.")
+
+        # Ask for confirmation unless skip flag is set
+        if skip_reset_confirm or click.confirm("Do you want to proceed with resetting rate limits?", default=True):
+            try:
+                headers = {"Authorization": f"Bearer {admin_password}"}
+                response = requests.get(f"{endpoint}/admin/reset-limits", headers=headers)
+                if response.status_code == 200:
+                    click.echo("✅ Rate limits reset successfully")
+                else:
+                    click.echo(f"⚠️ Failed to reset rate limits: {response.status_code}")
+                    if verbose:
+                        click.echo(response.text)
+                    if not click.confirm("Continue testing without reset?", default=False):
+                        click.echo("Testing cancelled.")
+                        return
+            except Exception as e:
+                click.echo(f"⚠️ Error resetting rate limits: {e}")
+                if not click.confirm("Continue testing without reset?", default=False):
+                    click.echo("Testing cancelled.")
+                    return
+        else:
+            click.echo("Reset cancelled. Testing will continue with existing rate limit state.")
+    else:
+        click.echo("\n⚠️ No admin password provided. Rate limits will not be reset.")
+        click.echo("⚠️ Tests may fail if rate limits have been reached previously.")
+        if not click.confirm("Continue testing without reset?", default=True):
+            click.echo("Testing cancelled.")
+            return
 
     # Run tests
     results = []
@@ -595,6 +635,17 @@ def test_command(endpoint: str, admin_password: Optional[str], env_file: str, co
         click.echo(f"❌ Error testing per-IP rate limiting: {e}")
         results.append(["Per-IP Rate Limiting", "❌ ERROR", str(e)])
 
+    # Reset rate limits again before testing global limit
+    if admin_password:
+        try:
+            headers = {"Authorization": f"Bearer {admin_password}"}
+            response = requests.get(f"{endpoint}/admin/reset-limits", headers=headers)
+            if response.status_code == 200 and verbose:
+                click.echo("✅ Rate limits reset before global limit test")
+        except Exception as e:
+            if verbose:
+                click.echo(f"⚠️ Error resetting rate limits: {e}")
+
     # Test 6: Global Rate limiting
     click.echo("\n🔍 Testing global rate limiting...")
     try:
@@ -608,10 +659,15 @@ def test_command(endpoint: str, admin_password: Optional[str], env_file: str, co
 
             # Make enough requests to hit the global limit
             global_limit_hit = False
-            # Add extra requests to ensure we exceed the limit
+
+            # Create multiple non-admin requests from different test IPs
+            # We'll use a special header that our worker will recognize for testing
             for i in range(global_limit + 2):
+                # Create a non-admin request with a unique test IP
+                test_headers = {"X-Test-IP": f"test-ip-{i}"}
+
                 # Use a unique query parameter to avoid caching
-                response = requests.get(f"{endpoint}/api/test?global_test={i}", headers=headers)
+                response = requests.get(f"{endpoint}/api/test?global_test={i}", headers=test_headers)
 
                 if verbose:
                     click.echo(f"   Request {i+1}: Status {response.status_code}")
@@ -643,10 +699,10 @@ def test_command(endpoint: str, admin_password: Optional[str], env_file: str, co
             if global_limit_hit:
                 results.append(["Global Rate Limiting", "✅ PASS", 429])
             else:
-                click.echo("⚠️ Could not trigger global rate limit despite admin access")
+                click.echo("⚠️ Could not trigger global rate limit")
                 results.append(["Global Rate Limiting", "⚠️ WARNING", "Not triggered"])
         else:
-            click.echo("⚠️ Cannot test global rate limit without admin password (needed to bypass per-IP limits)")
+            click.echo("⚠️ Cannot test global rate limit without admin password")
             results.append(["Global Rate Limiting", "⚠️ SKIPPED", "No admin password"])
     except Exception as e:
         click.echo(f"❌ Error testing global rate limiting: {e}")
@@ -668,6 +724,20 @@ def test_command(endpoint: str, admin_password: Optional[str], env_file: str, co
         click.echo("\n🎉 All tests passed successfully!")
     else:
         click.echo(f"\n⚠️ {failures} test(s) failed. See details above.")
+
+    # Reset rate limits after testing is complete
+    if admin_password:
+        click.echo("\n🔄 Cleaning up after tests...")
+        if skip_reset_confirm or click.confirm("Reset rate limits to clean up after testing?", default=True):
+            try:
+                headers = {"Authorization": f"Bearer {admin_password}"}
+                response = requests.get(f"{endpoint}/admin/reset-limits", headers=headers)
+                if response.status_code == 200:
+                    click.echo("✅ Rate limits reset successfully")
+                else:
+                    click.echo(f"⚠️ Failed to reset rate limits: {response.status_code}")
+            except Exception as e:
+                click.echo(f"⚠️ Error resetting rate limits: {e}")
 
 # Register the deploy command
 cli.add_command(deploy_command)

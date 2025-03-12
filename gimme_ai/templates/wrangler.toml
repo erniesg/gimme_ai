@@ -26,3 +26,13 @@ new_classes = ["IPRateLimiter", "GlobalRateLimiter"]
 [security]
 # Ensure secrets are properly handled
 allow_credentials_in_env = true
+
+# Observability settings for logging
+[observability]
+enabled = {{ observability.enabled }}
+head_sampling_rate = {{ observability.head_sampling_rate }}
+
+{% if observability.logs is defined %}
+[observability.logs]
+invocation_logs = {{ observability.logs.invocation_logs }}
+{% endif %}

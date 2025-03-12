@@ -192,44 +192,50 @@ def generate_wrangler_toml(config: GimmeConfig, output_dir: Path) -> Path:
     Returns:
         Path to the saved wrangler.toml file
     """
-    # Load the wrangler template from the package
     template_path = Path(__file__).parent.parent / "templates" / "wrangler.toml"
+    output_file = output_dir / "wrangler.toml"
 
-    # Check if template exists, if not create a basic one
-    if not template_path.exists():
-        template = """
-name = "{{ project_name }}"
-main = "worker.js"
-compatibility_date = "2023-05-15"
-
-[[durable_objects.bindings]]
-name = "IP_LIMITER"
-class_name = "IPRateLimiter"
-
-[[durable_objects.bindings]]
-name = "GLOBAL_LIMITER"
-class_name = "GlobalRateLimiter"
-
-[[migrations]]
-tag = "v1"
-new_classes = ["IPRateLimiter", "GlobalRateLimiter"]
-
-{% for key in required_keys %}
-# {{ key }}
-{% endfor %}
-"""
-    else:
-        template = load_template(template_path)
-
-    # Create the context for rendering
+    # Create context for template rendering
     context = {
         "project_name": config.project_name,
         "required_keys": config.required_keys,
-        "admin_password_env": config.admin_password_env
+        "admin_password_env": config.admin_password_env,
     }
 
-    # Render the template
-    output_path = output_dir / "wrangler.toml"
-    save_template(template, context, output_path)
-    print(f"Wrangler config saved to: {output_path}")
-    return output_path
+    # Add observability settings if they exist in the config
+    if hasattr(config, 'observability'):
+        # Convert Python booleans to lowercase strings for TOML compatibility
+        obs = config.observability.copy() if isinstance(config.observability, dict) else {}
+        if 'enabled' in obs:
+            obs['enabled'] = 'true' if obs['enabled'] else 'false'
+        if 'logs' in obs and 'invocation_logs' in obs['logs']:
+            obs['logs']['invocation_logs'] = 'true' if obs['logs']['invocation_logs'] else 'false'
+        context["observability"] = obs
+    else:
+        # Add default observability settings with proper TOML syntax
+        context["observability"] = {
+            "enabled": 'true',
+            "head_sampling_rate": 1.0,
+            "logs": {
+                "invocation_logs": 'true'
+            }
+        }
+
+    try:
+        with open(template_path, "r") as f:
+            template_content = f.read()
+
+        # Render template
+        template = Template(template_content)
+        rendered = template.render(**context)
+
+        # Write to output file
+        with open(output_file, "w") as f:
+            f.write(rendered)
+
+        return output_file
+    except Exception as e:
+        print(f"Error rendering template: {e}")
+        print(f"Template: {template_content[:100]}...")
+        print(f"Context: {context}")
+        raise

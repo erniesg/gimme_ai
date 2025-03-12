@@ -51,6 +51,41 @@ export default {
       return handleStatusRequest(env, clientIP, isAdmin);
     }
 
+    // Add reset endpoint (admin only)
+    if (path === "/admin/reset-limits" && isAdmin) {
+      try {
+        // Reset IP limiter for the current IP
+        const ipLimiterObj = env.IP_LIMITER.get(env.IP_LIMITER.idFromName(clientIP));
+        await ipLimiterObj.fetch(new URL("/reset", request.url));
+
+        // Reset global limiter
+        const globalLimiterObj = env.GLOBAL_LIMITER.get(env.GLOBAL_LIMITER.idFromName('global'));
+        await globalLimiterObj.fetch(new URL("/reset", request.url));
+
+        return new Response(JSON.stringify({
+          success: true,
+          message: "Rate limits reset successfully"
+        }), {
+          status: 200,
+          headers: {
+            "Content-Type": "application/json",
+            "Access-Control-Allow-Origin": "*"
+          }
+        });
+      } catch (error) {
+        return new Response(JSON.stringify({
+          error: "Reset failed",
+          message: error.message
+        }), {
+          status: 500,
+          headers: {
+            "Content-Type": "application/json",
+            "Access-Control-Allow-Origin": "*"
+          }
+        });
+      }
+    }
+
     // If auth error and auth was attempted, return error
     if (authError && authHeader) {
       return new Response(JSON.stringify({
@@ -74,11 +109,34 @@ export default {
 
     // For free tier, apply rate limiting
     try {
+      // Extract client IP, allowing for test IPs
+      const testIP = request.headers.get('X-Test-IP');
+      const effectiveIP = testIP || clientIP;
+
+      // Log request information in structured JSON format
+      console.log({
+        event: "rate_limit_check",
+        client_ip: clientIP,
+        test_ip: testIP,
+        effective_ip: effectiveIP,
+        path: path,
+        method: request.method,
+        timestamp: new Date().toISOString()
+      });
+
       // Check IP-specific rate limit
-      const ipLimiterObj = env.IP_LIMITER.get(env.IP_LIMITER.idFromName(clientIP));
+      const ipLimiterObj = env.IP_LIMITER.get(env.IP_LIMITER.idFromName(effectiveIP));
       const ipLimiterResp = await ipLimiterObj.fetch(request.url);
 
       if (!ipLimiterResp.ok) {
+        // Log rate limit exceeded in structured JSON format
+        console.log({
+          event: "rate_limit_exceeded",
+          limit_type: "per_ip",
+          client_ip: effectiveIP,
+          path: path,
+          timestamp: new Date().toISOString()
+        });
         return ipLimiterResp; // Return rate limit exceeded error
       }
 
@@ -87,6 +145,14 @@ export default {
       const globalLimiterResp = await globalLimiterObj.fetch(request.url);
 
       if (!globalLimiterResp.ok) {
+        // Log rate limit exceeded in structured JSON format
+        console.log({
+          event: "rate_limit_exceeded",
+          limit_type: "global",
+          client_ip: effectiveIP,
+          path: path,
+          timestamp: new Date().toISOString()
+        });
         return globalLimiterResp; // Return rate limit exceeded error
       }
 
