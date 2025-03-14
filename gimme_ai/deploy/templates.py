@@ -1,5 +1,6 @@
 # gimme_ai/deploy/templates.py
 import os
+import shutil
 from pathlib import Path
 from typing import Dict, Any, Union, Optional
 from jinja2 import Template, Environment, FileSystemLoader
@@ -63,16 +64,54 @@ def save_template(template_string: str, context: Dict[str, Any], output_path: Un
 
     return Path(output_path)
 
-def generate_worker_script(config: GimmeConfig, output_dir: Path) -> Path:
+def copy_project_files(config: GimmeConfig, output_dir: Path) -> bool:
     """
-    Generate the Cloudflare worker script from configuration.
+    Copy project-specific files if they exist.
 
     Args:
         config: The application configuration
         output_dir: Path to the output directory
 
     Returns:
-        Path to the saved worker script
+        True if project files were found and copied, False otherwise
+    """
+    project_name = config.project_name
+    project_dir = Path(__file__).parent.parent / "projects" / project_name
+
+    if not project_dir.exists() or not project_dir.is_dir():
+        print(f"No project directory found for {project_name}")
+        return False
+
+    # Create projects directory in output
+    projects_output_dir = output_dir / "projects" / project_name
+    os.makedirs(projects_output_dir, exist_ok=True)
+
+    # Copy all files from the project directory
+    for file_path in project_dir.glob('**/*'):
+        if file_path.is_file():
+            # Get relative path from project directory
+            rel_path = file_path.relative_to(project_dir)
+            # Create destination path
+            dest_path = projects_output_dir / rel_path
+            # Ensure parent directory exists
+            os.makedirs(dest_path.parent, exist_ok=True)
+            # Copy the file
+            shutil.copy2(file_path, dest_path)
+            print(f"Copied {file_path} to {dest_path}")
+
+    return True
+
+def generate_worker_script(config: GimmeConfig, output_dir: Path, has_project_files: bool = False) -> str:
+    """
+    Generate the Cloudflare worker script from configuration.
+
+    Args:
+        config: The application configuration
+        output_dir: Path to the output directory
+        has_project_files: Whether project-specific files were found
+
+    Returns:
+        The rendered worker script content
     """
     # Load the worker template from the package
     template_path = Path(__file__).parent.parent / "templates" / "worker.js"
@@ -85,7 +124,8 @@ def generate_worker_script(config: GimmeConfig, output_dir: Path) -> Path:
         "prod_endpoint": config.endpoints.prod,
         "admin_password_env": config.admin_password_env,
         "required_keys": config.required_keys,
-        "limits": config.limits
+        "limits": config.limits,
+        "has_project_files": has_project_files
     }
 
     # Print debug info
@@ -93,12 +133,9 @@ def generate_worker_script(config: GimmeConfig, output_dir: Path) -> Path:
     print(f"Worker template exists: {template_path.exists()}")
 
     # Render the template
-    output_path = output_dir / "worker.js"
-    save_template(template, context, output_path)
-    print(f"Worker script saved to: {output_path}")
-    return output_path
+    return render_template(template, context)
 
-def generate_durable_objects_script(config: GimmeConfig, output_dir: Optional[Path] = None) -> Path:
+def generate_durable_objects_script(config: GimmeConfig, output_dir: Optional[Path] = None) -> str:
     """Generate the Durable Objects script."""
     # Load template
     template_path = Path(__file__).parent.parent / "templates" / "durable_objects.js"
@@ -125,17 +162,7 @@ def generate_durable_objects_script(config: GimmeConfig, output_dir: Optional[Pa
     print(f"Durable Objects template context: {context}")
 
     # Render template
-    script = render_template(template, context)
-
-    # Save to file if output_dir provided
-    if output_dir:
-        os.makedirs(output_dir, exist_ok=True)
-        script_path = output_dir / "durable_objects.js"
-        with open(script_path, "w") as f:
-            f.write(script)
-        return script_path
-
-    return script
+    return render_template(template, context)
 
 def generate_wrangler_config(config: GimmeConfig) -> Dict[str, Any]:
     """
@@ -169,7 +196,9 @@ def generate_wrangler_config(config: GimmeConfig) -> Dict[str, Any]:
                 "new_classes": ["IPRateLimiter", "GlobalRateLimiter"]
             }
         ],
-        "vars": {}
+        "vars": {
+            "MODAL_ENDPOINT": config.endpoints.prod  # Add Modal endpoint as a variable
+        }
     }
 
     # Add environment variables for API keys
@@ -181,13 +210,14 @@ def generate_wrangler_config(config: GimmeConfig) -> Dict[str, Any]:
 
     return wrangler_config
 
-def generate_wrangler_toml(config: GimmeConfig, output_dir: Path) -> Path:
+def generate_wrangler_toml(config: GimmeConfig, output_dir: Path, has_project_files: bool = False) -> Path:
     """
     Generate the wrangler.toml file content from configuration.
 
     Args:
         config: The application configuration
         output_dir: Path to the output directory
+        has_project_files: Whether project-specific files were found
 
     Returns:
         Path to the saved wrangler.toml file
@@ -200,6 +230,8 @@ def generate_wrangler_toml(config: GimmeConfig, output_dir: Path) -> Path:
         "project_name": config.project_name,
         "required_keys": config.required_keys,
         "admin_password_env": config.admin_password_env,
+        "has_project_files": has_project_files,
+        "prod_endpoint": config.endpoints.prod  # Add Modal endpoint
     }
 
     # Add observability settings if they exist in the config

@@ -12,6 +12,14 @@ const PROJECT_NAME = "{{ project_name }}";
 // - {{ key }}
 {% endfor %}
 
+// Try to import project-specific handlers if they exist
+let projectHandlers = null;
+try {
+  projectHandlers = await import('./projects/{{ project_name }}/index.js');
+} catch (e) {
+  console.log(`No project-specific handlers found for ${PROJECT_NAME}`);
+}
+
 export default {
   async fetch(request, env, ctx) {
     // Handle CORS preflight requests
@@ -26,6 +34,11 @@ export default {
     // Determine environment (dev/prod)
     const isDev = url.hostname.includes('localhost') || url.hostname.includes('127.0.0.1');
     const backendUrl = isDev ? DEV_ENDPOINT : PROD_ENDPOINT;
+
+    // Make sure MODAL_ENDPOINT is available in env
+    if (!env.MODAL_ENDPOINT) {
+      env.MODAL_ENDPOINT = backendUrl;
+    }
 
     // Extract client IP
     const clientIP = request.headers.get('CF-Connecting-IP') || '127.0.0.1';
@@ -100,6 +113,30 @@ export default {
           "WWW-Authenticate": "Bearer"
         }
       });
+    }
+
+    // Check if we have project-specific handlers
+    if (projectHandlers && projectHandlers.default && typeof projectHandlers.default.handleRequest === 'function') {
+      // If we have project handlers, use them instead of the default forwarding
+      try {
+        // Pass auth status and environment to the project handler
+        return await projectHandlers.default.handleRequest(request, env, ctx, {
+          isAdmin,
+          backendUrl,
+          clientIP
+        });
+      } catch (error) {
+        return new Response(JSON.stringify({
+          error: "Project handler error",
+          message: error.message
+        }), {
+          status: 500,
+          headers: {
+            "Content-Type": "application/json",
+            "Access-Control-Allow-Origin": "*"
+          }
+        });
+      }
     }
 
     // For admin mode, bypass rate limiting

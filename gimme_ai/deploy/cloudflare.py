@@ -9,10 +9,11 @@ from ..config import GimmeConfig
 from .templates import (
     generate_worker_script,
     generate_durable_objects_script,
-    generate_wrangler_config,
+    generate_wrangler_toml,
     render_template,
     load_template,
-    save_template
+    save_template,
+    copy_project_files
 )
 
 class DeploymentResult(NamedTuple):
@@ -62,35 +63,25 @@ def generate_deployment_files(config: GimmeConfig, output_dir: Optional[Path] = 
     # Ensure directory exists
     os.makedirs(output_dir, exist_ok=True)
 
+    # Check for project-specific files
+    has_project_files = copy_project_files(config, output_dir)
+    if has_project_files:
+        print(f"Project-specific files for {config.project_name} were included in the deployment")
+
     # Generate worker script
-    worker_script = generate_worker_script(config)
+    worker_script = generate_worker_script(config, output_dir, has_project_files)
     worker_path = output_dir / "worker.js"
     with open(worker_path, "w") as f:
         f.write(worker_script)
 
     # Generate Durable Objects script
-    do_script = generate_durable_objects_script(config)
+    do_script = generate_durable_objects_script(config, output_dir)
     do_path = output_dir / "durable_objects.js"
     with open(do_path, "w") as f:
         f.write(do_script)
 
     # Generate wrangler.toml
-    wrangler_config = generate_wrangler_config(config)
-
-    # Load wrangler template
-    template_path = Path(__file__).parent.parent / "templates" / "wrangler.toml"
-    wrangler_template = load_template(template_path)
-
-    # Convert dict to TOML format
-    wrangler_path = output_dir / "wrangler.toml"
-
-    # We'll use a simple approach since the template is already in TOML format
-    wrangler_content = render_template(wrangler_template, {
-        "project_name": config.project_name
-    })
-
-    with open(wrangler_path, "w") as f:
-        f.write(wrangler_content)
+    wrangler_path = generate_wrangler_toml(config, output_dir, has_project_files)
 
     return DeploymentResult(
         worker_script=worker_path,
