@@ -3,6 +3,7 @@ name = "{{ project_name }}"
 main = "worker.js"
 compatibility_date = "2023-05-15"
 
+# Durable Objects bindings
 [[durable_objects.bindings]]
 name = "IP_LIMITER"
 class_name = "IPRateLimiter"
@@ -11,6 +12,7 @@ class_name = "IPRateLimiter"
 name = "GLOBAL_LIMITER"
 class_name = "GlobalRateLimiter"
 
+# Migrations for Durable Objects
 [[migrations]]
 tag = "v1"
 new_classes = ["IPRateLimiter", "GlobalRateLimiter"]

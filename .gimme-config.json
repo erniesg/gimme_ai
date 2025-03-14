@@ -3,7 +3,7 @@
   "output_dir": "output/gimme-ai-test",
   "endpoints": {
     "dev": "http://localhost:8000",
-    "prod": "https://gimme-ai-test.modal.run"
+    "prod": "https://berlayar-ai--wanx-backend-app-function.modal.run"
   },
   "limits": {
     "free_tier": {

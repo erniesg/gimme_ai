@@ -16,8 +16,9 @@ const PROJECT_NAME = "{{ project_name }}";
 let projectHandlers = null;
 try {
   projectHandlers = await import('./projects/{{ project_name }}/index.js');
+  console.log(`Successfully loaded project-specific handlers for ${PROJECT_NAME}`);
 } catch (e) {
-  console.log(`No project-specific handlers found for ${PROJECT_NAME}`);
+  console.log(`No project-specific handlers found for ${PROJECT_NAME}: ${e.message}`);
 }
 
 export default {
@@ -30,96 +31,37 @@ export default {
     // Extract request details
     const url = new URL(request.url);
     const path = url.pathname;
+    const clientIP = request.headers.get('CF-Connecting-IP') || '127.0.0.1';
 
     // Determine environment (dev/prod)
     const isDev = url.hostname.includes('localhost') || url.hostname.includes('127.0.0.1');
     const backendUrl = isDev ? DEV_ENDPOINT : PROD_ENDPOINT;
 
-    // Make sure MODAL_ENDPOINT is available in env
     if (!env.MODAL_ENDPOINT) {
       env.MODAL_ENDPOINT = backendUrl;
     }
 
-    // Extract client IP
-    const clientIP = request.headers.get('CF-Connecting-IP') || '127.0.0.1';
+    // Step 1: Authentication check
+    const isAdmin = checkAdminAuth(request, env);
 
-    // Check authentication mode
-    const authHeader = request.headers.get('Authorization') || '';
-    let isAdmin = false;
-    let authError = null;
+    // Step 2: Handle special endpoints
+    const specialResponse = await handleSpecialEndpoints(request, env, path, isAdmin, clientIP);
+    if (specialResponse) {
+      return specialResponse;
+    }
 
-    if (authHeader.startsWith('Bearer ')) {
-      const token = authHeader.substring(7);
-      // Check if token matches admin password
-      if (token === env[ADMIN_PASSWORD_ENV]) {
-        isAdmin = true;
-      } else {
-        // Invalid token provided
-        authError = "Invalid authentication token";
+    // Step 3: Rate limiting check (skip for admin)
+    if (!isAdmin) {
+      const rateLimitResponse = await checkRateLimits(request, env, clientIP);
+      if (rateLimitResponse) {
+        return rateLimitResponse;
       }
     }
 
-    // Handle status endpoint
-    if (path === "/status" || path === "/api/status") {
-      return handleStatusRequest(env, clientIP, isAdmin);
-    }
-
-    // Add reset endpoint (admin only)
-    if (path === "/admin/reset-limits" && isAdmin) {
-      try {
-        // Reset IP limiter for the current IP
-        const ipLimiterObj = env.IP_LIMITER.get(env.IP_LIMITER.idFromName(clientIP));
-        await ipLimiterObj.fetch(new URL("/reset", request.url));
-
-        // Reset global limiter
-        const globalLimiterObj = env.GLOBAL_LIMITER.get(env.GLOBAL_LIMITER.idFromName('global'));
-        await globalLimiterObj.fetch(new URL("/reset", request.url));
-
-        return new Response(JSON.stringify({
-          success: true,
-          message: "Rate limits reset successfully"
-        }), {
-          status: 200,
-          headers: {
-            "Content-Type": "application/json",
-            "Access-Control-Allow-Origin": "*"
-          }
-        });
-      } catch (error) {
-        return new Response(JSON.stringify({
-          error: "Reset failed",
-          message: error.message
-        }), {
-          status: 500,
-          headers: {
-            "Content-Type": "application/json",
-            "Access-Control-Allow-Origin": "*"
-          }
-        });
-      }
-    }
-
-    // If auth error and auth was attempted, return error
-    if (authError && authHeader) {
-      return new Response(JSON.stringify({
-        error: "Authentication failed",
-        message: authError,
-        status: 401
-      }), {
-        status: 401,
-        headers: {
-          "Content-Type": "application/json",
-          "Access-Control-Allow-Origin": "*",
-          "WWW-Authenticate": "Bearer"
-        }
-      });
-    }
-
-    // Check if we have project-specific handlers
+    // Step 4: Request handling - either project-specific or default
     if (projectHandlers && projectHandlers.default && typeof projectHandlers.default.handleRequest === 'function') {
-      // If we have project handlers, use them instead of the default forwarding
+      // Use project-specific handler
       try {
-        // Pass auth status and environment to the project handler
         return await projectHandlers.default.handleRequest(request, env, ctx, {
           isAdmin,
           backendUrl,
@@ -137,69 +79,102 @@ export default {
           }
         });
       }
+    } else {
+      // Use default handler
+      return isAdmin ?
+        handleAdminRequest(request, backendUrl, env) :
+        handleFreeRequest(request, backendUrl, env);
     }
+  }
+};
 
-    // For admin mode, bypass rate limiting
+// Check if request has admin authentication
+function checkAdminAuth(request, env) {
+  const authHeader = request.headers.get('Authorization') || '';
+
+  if (authHeader.startsWith('Bearer ')) {
+    const token = authHeader.substring(7);
+    if (token === env[ADMIN_PASSWORD_ENV]) {
+      return true;
+    } else {
+      // Invalid token provided, but we'll handle this in special endpoints
+      return false;
+    }
+  }
+
+  return false;
+}
+
+// Handle special endpoints like status, test, auth errors
+async function handleSpecialEndpoints(request, env, path, isAdmin, clientIP) {
+  const authHeader = request.headers.get('Authorization') || '';
+
+  // Handle auth errors
+  if (authHeader.startsWith('Bearer ') && !isAdmin) {
+    return new Response(JSON.stringify({
+      error: "Authentication failed",
+      message: "Invalid authentication token",
+      status: 401
+    }), {
+      status: 401,
+      headers: {
+        "Content-Type": "application/json",
+        "Access-Control-Allow-Origin": "*",
+        "WWW-Authenticate": "Bearer"
+      }
+    });
+  }
+
+  // Handle status endpoint
+  if (path === "/status" || path === "/api/status") {
+    return handleStatusRequest(env, clientIP, isAdmin);
+  }
+
+  // Handle test endpoint
+  if (path === "/api/test") {
     if (isAdmin) {
-      return handleAdminRequest(request, backendUrl, env);
-    }
-
-    // For free tier, apply rate limiting
-    try {
-      // Extract client IP, allowing for test IPs
-      const testIP = request.headers.get('X-Test-IP');
-      const effectiveIP = testIP || clientIP;
-
-      // Log request information in structured JSON format
-      console.log({
-        event: "rate_limit_check",
-        client_ip: clientIP,
-        test_ip: testIP,
-        effective_ip: effectiveIP,
-        path: path,
-        method: request.method,
-        timestamp: new Date().toISOString()
+      return new Response(JSON.stringify({
+        success: true,
+        message: "Test endpoint successful",
+        auth: "admin"
+      }), {
+        status: 200,
+        headers: {
+          "Content-Type": "application/json",
+          "Access-Control-Allow-Origin": "*"
+        }
       });
+    } else {
+      // For free tier, we'll check rate limits later and then return this
+      // We don't return here so rate limiting can be applied
+    }
+  }
 
-      // Check IP-specific rate limit
-      const ipLimiterObj = env.IP_LIMITER.get(env.IP_LIMITER.idFromName(effectiveIP));
-      const ipLimiterResp = await ipLimiterObj.fetch(request.url);
+  // Handle admin reset endpoint
+  if (path === "/admin/reset-limits" && isAdmin) {
+    try {
+      // Reset IP limiter for the current IP
+      const ipLimiterObj = env.IP_LIMITER.get(env.IP_LIMITER.idFromName(clientIP));
+      await ipLimiterObj.fetch(new URL("/reset", request.url));
 
-      if (!ipLimiterResp.ok) {
-        // Log rate limit exceeded in structured JSON format
-        console.log({
-          event: "rate_limit_exceeded",
-          limit_type: "per_ip",
-          client_ip: effectiveIP,
-          path: path,
-          timestamp: new Date().toISOString()
-        });
-        return ipLimiterResp; // Return rate limit exceeded error
-      }
-
-      // Check global rate limit
+      // Reset global limiter
       const globalLimiterObj = env.GLOBAL_LIMITER.get(env.GLOBAL_LIMITER.idFromName('global'));
-      const globalLimiterResp = await globalLimiterObj.fetch(request.url);
+      await globalLimiterObj.fetch(new URL("/reset", request.url));
 
-      if (!globalLimiterResp.ok) {
-        // Log rate limit exceeded in structured JSON format
-        console.log({
-          event: "rate_limit_exceeded",
-          limit_type: "global",
-          client_ip: effectiveIP,
-          path: path,
-          timestamp: new Date().toISOString()
-        });
-        return globalLimiterResp; // Return rate limit exceeded error
-      }
-
-      // If we passed rate limiting, forward request to backend
-      return handleFreeRequest(request, backendUrl, env);
+      return new Response(JSON.stringify({
+        success: true,
+        message: "Rate limits reset successfully"
+      }), {
+        status: 200,
+        headers: {
+          "Content-Type": "application/json",
+          "Access-Control-Allow-Origin": "*"
+        }
+      });
     } catch (error) {
       return new Response(JSON.stringify({
-        error: "Gateway error",
-        message: "An error occurred processing your request",
-        details: error.message
+        error: "Reset failed",
+        message: error.message
       }), {
         status: 500,
         headers: {
@@ -209,7 +184,90 @@ export default {
       });
     }
   }
-};
+
+  // No special endpoint matched
+  return null;
+}
+
+// Check rate limits for free tier
+async function checkRateLimits(request, env, clientIP) {
+  try {
+    const url = new URL(request.url);
+    const path = url.pathname;
+    const testIP = request.headers.get('X-Test-IP');
+    const effectiveIP = testIP || clientIP;
+
+    // Log request information
+    console.log({
+      event: "rate_limit_check",
+      client_ip: clientIP,
+      effective_ip: effectiveIP,
+      path: path,
+      method: request.method,
+      timestamp: new Date().toISOString()
+    });
+
+    // Check IP-specific rate limit
+    const ipLimiterObj = env.IP_LIMITER.get(env.IP_LIMITER.idFromName(effectiveIP));
+    const ipLimiterResp = await ipLimiterObj.fetch(request.url);
+
+    if (!ipLimiterResp.ok) {
+      console.log({
+        event: "rate_limit_exceeded",
+        limit_type: "per_ip",
+        client_ip: effectiveIP,
+        path: path,
+        timestamp: new Date().toISOString()
+      });
+      return ipLimiterResp; // Return rate limit exceeded error
+    }
+
+    // Check global rate limit
+    const globalLimiterObj = env.GLOBAL_LIMITER.get(env.GLOBAL_LIMITER.idFromName('global'));
+    const globalLimiterResp = await globalLimiterObj.fetch(request.url);
+
+    if (!globalLimiterResp.ok) {
+      console.log({
+        event: "rate_limit_exceeded",
+        limit_type: "global",
+        client_ip: effectiveIP,
+        path: path,
+        timestamp: new Date().toISOString()
+      });
+      return globalLimiterResp; // Return rate limit exceeded error
+    }
+
+    // Handle test endpoint response after rate limiting
+    if (url.pathname === "/api/test") {
+      return new Response(JSON.stringify({
+        success: true,
+        message: "Test endpoint successful",
+        auth: "free"
+      }), {
+        status: 200,
+        headers: {
+          "Content-Type": "application/json",
+          "Access-Control-Allow-Origin": "*"
+        }
+      });
+    }
+
+    // Rate limits passed, no response needed
+    return null;
+  } catch (error) {
+    return new Response(JSON.stringify({
+      error: "Gateway error",
+      message: "An error occurred checking rate limits",
+      details: error.message
+    }), {
+      status: 500,
+      headers: {
+        "Content-Type": "application/json",
+        "Access-Control-Allow-Origin": "*"
+      }
+    });
+  }
+}
 
 // Handle requests with admin privileges
 async function handleAdminRequest(request, backendUrl, env) {
@@ -217,10 +275,18 @@ async function handleAdminRequest(request, backendUrl, env) {
     // Clone the request to modify it
     const url = new URL(request.url);
 
+    // Log the environment variables for debugging
+    console.log({
+      event: "admin_request",
+      modal_endpoint: env.MODAL_ENDPOINT || backendUrl,
+      modal_key_present: !!env.MODAL_TOKEN_ID,
+      modal_secret_present: !!env.MODAL_TOKEN_SECRET
+    });
+
     // Create new request to backend
-    const backendRequest = new Request(`${backendUrl}${url.pathname}${url.search}`, {
+    const backendRequest = new Request(`${env.MODAL_ENDPOINT || backendUrl}${url.pathname}${url.search}`, {
       method: request.method,
-      headers: request.headers,
+      headers: new Headers(request.headers),
       body: request.body
     });
 
@@ -229,13 +295,29 @@ async function handleAdminRequest(request, backendUrl, env) {
     backendRequest.headers.set('X-Auth-Source', 'gimme-ai-gateway');
     backendRequest.headers.set('X-Project-Name', PROJECT_NAME);
 
-    // Add API keys as headers - they are pulled from the env
-    {% for key in required_keys %}
-    backendRequest.headers.set('{{ key }}', env['{{ key }}']);
-    {% endfor %}
+    // Add Modal credentials explicitly
+    if (env.MODAL_TOKEN_ID) {
+      backendRequest.headers.set('Modal-Key', env.MODAL_TOKEN_ID);
+    }
+    if (env.MODAL_TOKEN_SECRET) {
+      backendRequest.headers.set('Modal-Secret', env.MODAL_TOKEN_SECRET);
+    }
+
+    // Log the headers for debugging
+    console.log({
+      event: "request_headers",
+      headers: Object.fromEntries([...backendRequest.headers.entries()])
+    });
 
     // Forward to backend and return response
     const response = await fetch(backendRequest);
+
+    // Log the response status for debugging
+    console.log({
+      event: "response_received",
+      status: response.status,
+      statusText: response.statusText
+    });
 
     // Clone the response to add CORS headers
     const corsResponse = new Response(response.body, response);
@@ -244,6 +326,12 @@ async function handleAdminRequest(request, backendUrl, env) {
 
     return corsResponse;
   } catch (error) {
+    console.error({
+      event: "request_error",
+      error: error.message,
+      stack: error.stack
+    });
+
     return new Response(JSON.stringify({
       error: "Gateway error",
       message: "Error forwarding request to backend",
@@ -275,6 +363,10 @@ async function handleFreeRequest(request, backendUrl, env) {
     backendRequest.headers.set('X-Auth-Mode', 'free');
     backendRequest.headers.set('X-Auth-Source', 'gimme-ai-gateway');
     backendRequest.headers.set('X-Project-Name', PROJECT_NAME);
+
+    // Add Modal credentials explicitly
+    backendRequest.headers.set('Modal-Key', env.MODAL_TOKEN_ID);
+    backendRequest.headers.set('Modal-Secret', env.MODAL_TOKEN_SECRET);
 
     // Add API keys as headers - they are pulled from the env
     {% for key in required_keys %}

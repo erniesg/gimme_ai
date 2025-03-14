@@ -69,16 +69,11 @@ def generate_deployment_files(config: GimmeConfig, output_dir: Optional[Path] = 
         print(f"Project-specific files for {config.project_name} were included in the deployment")
 
     # Generate worker script
-    worker_script = generate_worker_script(config, output_dir, has_project_files)
-    worker_path = output_dir / "worker.js"
-    with open(worker_path, "w") as f:
-        f.write(worker_script)
+    worker_path = generate_worker_script(config, output_dir, has_project_files)
 
     # Generate Durable Objects script
-    do_script = generate_durable_objects_script(config, output_dir)
     do_path = output_dir / "durable_objects.js"
-    with open(do_path, "w") as f:
-        f.write(do_script)
+    do_script = generate_durable_objects_script(config, output_dir)
 
     # Generate wrangler.toml
     wrangler_path = generate_wrangler_toml(config, output_dir, has_project_files)
@@ -248,7 +243,6 @@ def deploy_to_cloudflare(config: GimmeConfig, deployment_files: Optional[Deploym
             message=f"Deployment successful: {worker_url}",
             url=worker_url
         )
-
     except Exception as e:
         logger.error(f"Error during deployment: {e}")
         return DeploymentStatus(

@@ -101,7 +101,7 @@ def copy_project_files(config: GimmeConfig, output_dir: Path) -> bool:
 
     return True
 
-def generate_worker_script(config: GimmeConfig, output_dir: Path, has_project_files: bool = False) -> str:
+def generate_worker_script(config: GimmeConfig, output_dir: Path, has_project_files: bool = False) -> Path:
     """
     Generate the Cloudflare worker script from configuration.
 
@@ -111,7 +111,7 @@ def generate_worker_script(config: GimmeConfig, output_dir: Path, has_project_fi
         has_project_files: Whether project-specific files were found
 
     Returns:
-        The rendered worker script content
+        Path to the saved worker script
     """
     # Load the worker template from the package
     template_path = Path(__file__).parent.parent / "templates" / "worker.js"
@@ -133,7 +133,10 @@ def generate_worker_script(config: GimmeConfig, output_dir: Path, has_project_fi
     print(f"Worker template exists: {template_path.exists()}")
 
     # Render the template
-    return render_template(template, context)
+    output_path = output_dir / "worker.js"
+    save_template(template, context, output_path)
+    print(f"Worker script saved to: {output_path}")
+    return output_path
 
 def generate_durable_objects_script(config: GimmeConfig, output_dir: Optional[Path] = None) -> str:
     """Generate the Durable Objects script."""
