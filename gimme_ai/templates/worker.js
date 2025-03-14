@@ -21,6 +21,37 @@ try {
   console.log(`No project-specific handlers found for ${PROJECT_NAME}: ${e.message}`);
 }
 
+// Add this JWT utility function at the top of your file
+async function createJWT(payload, secret) {
+  // Create the parts of the JWT
+  const header = { alg: "HS256", typ: "JWT" };
+
+  // Base64 encode the header and payload
+  const encodedHeader = btoa(JSON.stringify(header));
+  const encodedPayload = btoa(JSON.stringify(payload));
+
+  // Create the data to sign
+  const dataToSign = `${encodedHeader}.${encodedPayload}`;
+
+  // Convert secret to a key
+  const encoder = new TextEncoder();
+  const keyData = encoder.encode(secret);
+  const key = await crypto.subtle.importKey(
+    "raw", keyData, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]
+  );
+
+  // Sign the data
+  const signature = await crypto.subtle.sign(
+    "HMAC", key, encoder.encode(dataToSign)
+  );
+
+  // Convert signature to base64
+  const signatureBase64 = btoa(String.fromCharCode(...new Uint8Array(signature)));
+
+  // Return the complete JWT
+  return `${encodedHeader}.${encodedPayload}.${signatureBase64}`;
+}
+
 export default {
   async fetch(request, env, ctx) {
     // Handle CORS preflight requests
@@ -279,8 +310,7 @@ async function handleAdminRequest(request, backendUrl, env) {
     console.log({
       event: "admin_request",
       modal_endpoint: env.MODAL_ENDPOINT || backendUrl,
-      modal_key_present: !!env.MODAL_TOKEN_ID,
-      modal_secret_present: !!env.MODAL_TOKEN_SECRET
+      jwt_secret_present: !!env.SHARED_JWT_SECRET
     });
 
     // Create new request to backend
@@ -290,18 +320,31 @@ async function handleAdminRequest(request, backendUrl, env) {
       body: request.body
     });
 
-    // Add auth state to headers
+    // Create JWT payload
+    const jwtPayload = {
+      iss: "gimme-ai-gateway",
+      sub: PROJECT_NAME,
+      exp: Math.floor(Date.now() / 1000) + 300, // 5 minutes expiration
+      iat: Math.floor(Date.now() / 1000),
+      mode: "admin",
+      jti: crypto.randomUUID() // Unique token ID to prevent replay
+    };
+
+    // Sign the JWT
+    const jwt = await createJWT(jwtPayload, env.SHARED_JWT_SECRET);
+
+    // Add JWT to Authorization header
+    backendRequest.headers.set('Authorization', `Bearer ${jwt}`);
+
+    // Add auth state to headers (for backward compatibility)
     backendRequest.headers.set('X-Auth-Mode', 'admin');
     backendRequest.headers.set('X-Auth-Source', 'gimme-ai-gateway');
     backendRequest.headers.set('X-Project-Name', PROJECT_NAME);
 
-    // Add Modal credentials explicitly
-    if (env.MODAL_TOKEN_ID) {
-      backendRequest.headers.set('Modal-Key', env.MODAL_TOKEN_ID);
-    }
-    if (env.MODAL_TOKEN_SECRET) {
-      backendRequest.headers.set('Modal-Secret', env.MODAL_TOKEN_SECRET);
-    }
+    // Add API keys as headers - they are pulled from the env
+    {% for key in required_keys %}
+    backendRequest.headers.set('{{ key }}', env['{{ key }}']);
+    {% endfor %}
 
     // Log the headers for debugging
     console.log({
@@ -355,18 +398,30 @@ async function handleFreeRequest(request, backendUrl, env) {
     // Create new request to backend
     const backendRequest = new Request(`${backendUrl}${url.pathname}${url.search}`, {
       method: request.method,
-      headers: request.headers,
+      headers: new Headers(request.headers),
       body: request.body
     });
 
-    // Add auth state to headers
+    // Create JWT payload
+    const jwtPayload = {
+      iss: "gimme-ai-gateway",
+      sub: PROJECT_NAME,
+      exp: Math.floor(Date.now() / 1000) + 300, // 5 minutes expiration
+      iat: Math.floor(Date.now() / 1000),
+      mode: "free",
+      jti: crypto.randomUUID() // Unique token ID to prevent replay
+    };
+
+    // Sign the JWT
+    const jwt = await createJWT(jwtPayload, env.SHARED_JWT_SECRET);
+
+    // Add JWT to Authorization header
+    backendRequest.headers.set('Authorization', `Bearer ${jwt}`);
+
+    // Add auth state to headers (for backward compatibility)
     backendRequest.headers.set('X-Auth-Mode', 'free');
     backendRequest.headers.set('X-Auth-Source', 'gimme-ai-gateway');
     backendRequest.headers.set('X-Project-Name', PROJECT_NAME);
-
-    // Add Modal credentials explicitly
-    backendRequest.headers.set('Modal-Key', env.MODAL_TOKEN_ID);
-    backendRequest.headers.set('Modal-Secret', env.MODAL_TOKEN_SECRET);
 
     // Add API keys as headers - they are pulled from the env
     {% for key in required_keys %}

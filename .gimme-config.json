@@ -14,7 +14,8 @@
   },
   "required_keys": [
     "MODAL_TOKEN_ID",
-    "MODAL_TOKEN_SECRET"
+    "MODAL_TOKEN_SECRET",
+    "SHARED_JWT_SECRET"
   ],
   "admin_password_env": "GIMME_ADMIN_PASSWORD",
   "cors": {
