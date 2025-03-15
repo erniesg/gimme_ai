@@ -96,6 +96,13 @@ export default {
       }
     }
 
+    // Handle workflow requests
+    if (path.startsWith('/workflow')) {
+      // Import the workflowHandler from workflow.js
+      const { workflowHandler } = await import('./workflow.js');
+      return workflowHandler.fetch(request, env);
+    }
+
     // Step 4: Request handling - either project-specific or default
     if (projectHandlers && projectHandlers.default && typeof projectHandlers.default.handleRequest === 'function') {
       // Use project-specific handler
