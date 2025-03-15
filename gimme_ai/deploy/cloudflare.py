@@ -72,8 +72,7 @@ def generate_deployment_files(config: GimmeConfig, output_dir: Optional[Path] = 
     worker_path = generate_worker_script(config, output_dir, has_project_files)
 
     # Generate Durable Objects script
-    do_path = output_dir / "durable_objects.js"
-    do_script = generate_durable_objects_script(config, output_dir)
+    do_path = generate_durable_objects_script(config, output_dir)
 
     # Generate wrangler.toml
     wrangler_path = generate_wrangler_toml(config, output_dir, has_project_files)

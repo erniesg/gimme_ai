@@ -138,8 +138,17 @@ def generate_worker_script(config: GimmeConfig, output_dir: Path, has_project_fi
     print(f"Worker script saved to: {output_path}")
     return output_path
 
-def generate_durable_objects_script(config: GimmeConfig, output_dir: Optional[Path] = None) -> str:
-    """Generate the Durable Objects script."""
+def generate_durable_objects_script(config: GimmeConfig, output_dir: Optional[Path] = None) -> Path:
+    """
+    Generate the Durable Objects script and save it to disk.
+
+    Args:
+        config: The application configuration
+        output_dir: Path to the output directory
+
+    Returns:
+        Path to the saved durable objects script
+    """
     # Load template
     template_path = Path(__file__).parent.parent / "templates" / "durable_objects.js"
     template = load_template(template_path)
@@ -164,8 +173,15 @@ def generate_durable_objects_script(config: GimmeConfig, output_dir: Optional[Pa
     # Debug output to verify the context
     print(f"Durable Objects template context: {context}")
 
-    # Render template
-    return render_template(template, context)
+    # Save the rendered template to a file
+    if output_dir:
+        output_path = output_dir / "durable_objects.js"
+        save_template(template, context, output_path)
+        print(f"Durable Objects script saved to: {output_path}")
+        return output_path
+
+    # If no output_dir is provided, raise an error
+    raise ValueError("output_dir must be provided to save the durable objects script")
 
 def generate_wrangler_config(config: GimmeConfig) -> Dict[str, Any]:
     """
