@@ -125,7 +125,8 @@ def generate_worker_script(config: GimmeConfig, output_dir: Path, has_project_fi
         "admin_password_env": config.admin_password_env,
         "required_keys": config.required_keys,
         "limits": config.limits,
-        "has_project_files": has_project_files
+        "has_project_files": has_project_files,
+        "workflow_class_name": "VideoGenerationWorkflow"
     }
 
     # Print debug info
@@ -245,8 +246,14 @@ def generate_wrangler_toml(config: GimmeConfig, output_dir: Path, has_project_fi
     template_path = Path(__file__).parent.parent / "templates" / "wrangler.toml"
     output_file = output_dir / "wrangler.toml"
 
+    # Check if workflow is enabled in the config
+    workflow_config = getattr(config, 'workflow', None)
+    has_workflow = has_workflow or (workflow_config and getattr(workflow_config, 'enabled', False))
+
     # Create context for template rendering
-    workflow_class_name = f"{config.project_name.title().replace('-', '')}Workflow"
+    workflow_class_name = "VideoGenerationWorkflow"
+    if workflow_config and workflow_config.class_name:
+        workflow_class_name = workflow_config.class_name
 
     context = {
         "project_name": config.project_name,
@@ -254,7 +261,7 @@ def generate_wrangler_toml(config: GimmeConfig, output_dir: Path, has_project_fi
         "admin_password_env": config.admin_password_env,
         "has_project_files": has_project_files,
         "prod_endpoint": config.endpoints.prod,
-        "has_workflow": True,  # Always include workflow support
+        "has_workflow": has_workflow,
         "workflow_class_name": workflow_class_name
     }
 
@@ -296,7 +303,7 @@ def generate_wrangler_toml(config: GimmeConfig, output_dir: Path, has_project_fi
         print(f"Context: {context}")
         raise
 
-def generate_workflow_script(config: GimmeConfig, output_dir: Path) -> Path:
+def generate_workflow_script(config: GimmeConfig, output_dir: Path) -> Optional[Path]:
     """
     Generate the Cloudflare workflow script from configuration.
 
@@ -305,55 +312,33 @@ def generate_workflow_script(config: GimmeConfig, output_dir: Path) -> Path:
         output_dir: Path to the output directory
 
     Returns:
-        Path to the saved workflow script
+        Path to the saved workflow script or None if workflow is not enabled
     """
+    # Check if workflow is enabled
+    workflow_config = getattr(config, 'workflow', None)
+    if not workflow_config or not getattr(workflow_config, 'enabled', False):
+        print("Workflow is not enabled in configuration, skipping workflow script generation")
+        return None
+
     # Load the workflow template from the package
     template_path = Path(__file__).parent.parent / "templates" / "workflow.js"
     template = load_template(template_path)
 
     # Create the context for rendering
-    workflow_class_name = f"{config.project_name.title().replace('-', '')}Workflow"
+    workflow_class_name = getattr(workflow_config, 'class_name', None) or f"{config.project_name.title().replace('-', '')}Workflow"
 
     context = {
         "project_name": config.project_name,
         "workflow_class_name": workflow_class_name,
         "required_keys": config.required_keys,
-        "has_r2_bucket": getattr(config, 'has_r2_bucket', False),
+        "has_r2_bucket": getattr(workflow_config, 'has_r2_bucket', False),
         "r2_bucket_name": getattr(config, 'r2_bucket_name', 'STORAGE_BUCKET'),
-        "workflow_params": getattr(config, 'workflow_params', [])
+        "workflow_params": getattr(workflow_config, 'params', [])
     }
 
     # Render the template
     output_path = output_dir / "workflow.js"
     save_template(template, context, output_path)
     print(f"Workflow script saved to: {output_path}")
-
-    # Also update worker.js to import the workflow handler
-    worker_path = output_dir / "worker.js"
-    if worker_path.exists():
-        with open(worker_path, 'r') as f:
-            worker_content = f.read()
-
-        # Check if workflow import already exists
-        if "import { workflowHandler } from './workflow.js'" not in worker_content:
-            # Add import at the top after other imports
-            import_line = "import { workflowHandler } from './workflow.js';\n"
-            worker_content = worker_content.replace("// Configuration", f"{import_line}\n// Configuration")
-
-            # Add workflow route handling in the fetch function
-            workflow_handler = """
-    // Handle workflow requests
-    if (url.pathname.startsWith('/workflow')) {
-      return workflowHandler.fetch(request, env);
-    }
-"""
-            # Insert before the default handler
-            if "// Use default handler" in worker_content:
-                worker_content = worker_content.replace("// Use default handler", f"{workflow_handler}\n      // Use default handler")
-
-            with open(worker_path, 'w') as f:
-                f.write(worker_content)
-
-            print(f"Updated worker.js to include workflow handler")
 
     return output_path

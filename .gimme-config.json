@@ -1,14 +1,14 @@
 {
-  "project_name": "gimme-ai-test",
-  "output_dir": "output/gimme-ai-test",
+  "project_name": "gimme-ai-test2",
+  "output_dir": "output/gimme-ai-test2",
   "endpoints": {
     "dev": "http://localhost:8000",
-    "prod": "https://berlayar-ai--wanx-backend-app-function.modal.run"
+    "prod": "https://gimme-ai-test2.modal.run"
   },
   "limits": {
     "free_tier": {
-      "per_ip": 1,
-      "global": 3,
+      "per_ip": 10,
+      "global": 100,
       "rate_window": "lifetime"
     }
   },
@@ -34,11 +34,9 @@
       "Authorization"
     ]
   },
-  "observability": {
+  "workflow": {
     "enabled": true,
-    "head_sampling_rate": 1.0,
-    "logs": {
-      "invocation_logs": true
-    }
+    "class_name": "VideoGenerationWorkflow",
+    "params": []
   }
 }

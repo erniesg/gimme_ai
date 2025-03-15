@@ -1,28 +1,27 @@
 // Main Worker Script for API Gateway
 // Handles authentication, rate limiting, and request forwarding
 import { IPRateLimiter, GlobalRateLimiter } from './durable_objects.js';
+// Import the workflow class
 import { VideoGenerationWorkflow } from './workflow.js';
-
-{% if workflow and workflow.enabled %}
-// Export the workflow class to make it available to the runtime
-export { VideoGenerationWorkflow };
-{% endif %}
+import { workflowHandler } from './workflow.js';
 
 // Configuration
-const DEV_ENDPOINT = "{{ dev_endpoint }}";
-const PROD_ENDPOINT = "{{ prod_endpoint }}";
-const ADMIN_PASSWORD_ENV = "{{ admin_password_env }}";
-const PROJECT_NAME = "{{ project_name }}";
+const DEV_ENDPOINT = "http://localhost:8000";
+const PROD_ENDPOINT = "https://gimme-ai-test2.modal.run";
+const ADMIN_PASSWORD_ENV = "GIMME_ADMIN_PASSWORD";
+const PROJECT_NAME = "gimme-ai-test2";
 
 // Required API Keys - these will be available in the worker environment:
-{% for key in required_keys %}
-// - {{ key }}
-{% endfor %}
+
+// - MODAL_TOKEN_ID
+
+// - MODAL_TOKEN_SECRET
+
 
 // Try to import project-specific handlers if they exist
 let projectHandlers = null;
 try {
-  projectHandlers = await import('./projects/{{ project_name }}/index.js');
+  projectHandlers = await import('./projects/gimme-ai-test2/index.js');
   console.log(`Successfully loaded project-specific handlers for ${PROJECT_NAME}`);
 } catch (e) {
   console.log(`No project-specific handlers found for ${PROJECT_NAME}: ${e.message}`);
@@ -118,6 +117,12 @@ export default {
         });
       }
     } else {
+      
+    // Handle workflow requests
+    if (url.pathname.startsWith('/workflow')) {
+      return workflowHandler.fetch(request, env);
+    }
+
       // Use default handler
       return isAdmin ?
         handleAdminRequest(request, backendUrl, env) :
@@ -349,9 +354,11 @@ async function handleAdminRequest(request, backendUrl, env) {
     backendRequest.headers.set('X-Project-Name', PROJECT_NAME);
 
     // Add API keys as headers - they are pulled from the env
-    {% for key in required_keys %}
-    backendRequest.headers.set('{{ key }}', env['{{ key }}']);
-    {% endfor %}
+    
+    backendRequest.headers.set('MODAL_TOKEN_ID', env['MODAL_TOKEN_ID']);
+    
+    backendRequest.headers.set('MODAL_TOKEN_SECRET', env['MODAL_TOKEN_SECRET']);
+    
 
     // Log the headers for debugging
     console.log({
@@ -431,9 +438,11 @@ async function handleFreeRequest(request, backendUrl, env) {
     backendRequest.headers.set('X-Project-Name', PROJECT_NAME);
 
     // Add API keys as headers - they are pulled from the env
-    {% for key in required_keys %}
-    backendRequest.headers.set('{{ key }}', env['{{ key }}']);
-    {% endfor %}
+    
+    backendRequest.headers.set('MODAL_TOKEN_ID', env['MODAL_TOKEN_ID']);
+    
+    backendRequest.headers.set('MODAL_TOKEN_SECRET', env['MODAL_TOKEN_SECRET']);
+    
 
     // Forward to backend and return response
     const response = await fetch(backendRequest);
@@ -475,7 +484,7 @@ function handleCorsRequest() {
 // Handle status requests
 function handleStatusRequest(env, clientIP, isAdmin) {
   const mode = isAdmin ? "admin" : "free";
-  const limit = isAdmin ? "unlimited" : "{{ limits.free_tier.per_ip }}";
+  const limit = isAdmin ? "unlimited" : "10";
 
   return new Response(JSON.stringify({
     status: "online",
@@ -494,8 +503,7 @@ function handleStatusRequest(env, clientIP, isAdmin) {
   });
 }
 
-// IMPORTANT: Export the workflow class
+// Export the workflow class to make it available to the runtime
 export { VideoGenerationWorkflow };
 
-// Export the rate limiters
 export { IPRateLimiter, GlobalRateLimiter };

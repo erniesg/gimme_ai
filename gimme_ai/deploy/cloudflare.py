@@ -22,6 +22,7 @@ class DeploymentResult(NamedTuple):
     worker_script: Path
     durable_objects_script: Path
     wrangler_config: Path
+    workflow_script: Path = None
 
 class DeploymentStatus(NamedTuple):
     """Result of a deployment operation."""
@@ -85,7 +86,8 @@ def generate_deployment_files(config: GimmeConfig, output_dir: Optional[Path] = 
     return DeploymentResult(
         worker_script=worker_path,
         durable_objects_script=do_path,
-        wrangler_config=wrangler_path
+        wrangler_config=wrangler_path,
+        workflow_script=workflow_path
     )
 
 def deploy_to_cloudflare(config: GimmeConfig, deployment_files: Optional[DeploymentResult] = None) -> DeploymentStatus:
@@ -125,9 +127,43 @@ def deploy_to_cloudflare(config: GimmeConfig, deployment_files: Optional[Deploym
     if deployment_files is None:
         deployment_files = generate_deployment_files(config, output_dir)
 
+    # Verify that required files exist - ONLY check worker.js and durable_objects.js
+    required_files = [deployment_files.worker_script, deployment_files.durable_objects_script]
+
+    for file_path in required_files:
+        if not file_path or not file_path.exists():
+            logger.error(f"Required file missing: {file_path}")
+            return DeploymentStatus(
+                success=False,
+                message=f"Required file missing: {file_path}"
+            )
+        else:
+            logger.info(f"Found required file: {file_path}")
+
+    # Check if workflow file exists, but don't fail if it doesn't
+    if deployment_files.workflow_script and deployment_files.workflow_script.exists():
+        logger.info(f"Found workflow file: {deployment_files.workflow_script}")
+    else:
+        # Generate the workflow file directly here to ensure it exists
+        workflow_path = generate_workflow_script(config, output_dir)
+        if workflow_path and workflow_path.exists():
+            logger.info(f"Generated workflow file: {workflow_path}")
+            # Update the deployment_files with the new workflow path
+            deployment_files = DeploymentResult(
+                worker_script=deployment_files.worker_script,
+                durable_objects_script=deployment_files.durable_objects_script,
+                wrangler_config=deployment_files.wrangler_config,
+                workflow_script=workflow_path
+            )
+        else:
+            logger.warning("Could not generate workflow file, continuing without it")
+
     # Change to the directory with the deployment files
     original_dir = os.getcwd()
     os.chdir(deployment_files.worker_script.parent)
+
+    # List all files in the directory to verify
+    logger.info(f"Files in deployment directory: {os.listdir('.')}")
 
     try:
         # Prepare environment variables for wrangler
@@ -165,6 +201,36 @@ def deploy_to_cloudflare(config: GimmeConfig, deployment_files: Optional[Deploym
         if missing_keys:
             logger.warning(f"Missing required environment variables: {', '.join(missing_keys)}")
 
+        # First, try to build the worker to check for errors
+        build_cmd = ["npx", "wrangler", "build"]
+        logger.info(f"Running build command: {' '.join(build_cmd)}")
+
+        build_result = subprocess.run(
+            build_cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+            env=env_vars
+        )
+
+        # Save build output for inspection
+        build_output_file = os.path.join(os.getcwd(), "build_output.txt")
+        with open(build_output_file, "w") as f:
+            f.write("STDOUT:\n")
+            f.write(build_result.stdout)
+            f.write("\n\nSTDERR:\n")
+            f.write(build_result.stderr)
+
+        logger.info(f"Build output saved to {build_output_file}")
+
+        if build_result.returncode != 0:
+            return DeploymentStatus(
+                success=False,
+                message=f"Error building worker: {build_result.stderr}"
+            )
+
+        # If build succeeds, proceed with deployment
         # Run wrangler deploy
         deploy_cmd = ["npx", "wrangler", "deploy"]
         logger.info(f"Running command: {' '.join(deploy_cmd)}")

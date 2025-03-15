@@ -1,0 +1,19 @@
+{
+  "project_name": "gimme-ai-test2",
+  "required_keys": [
+    "MODAL_TOKEN_ID",
+    "MODAL_TOKEN_SECRET"
+  ],
+  "admin_password_env": "GIMME_ADMIN_PASSWORD",
+  "has_project_files": false,
+  "prod_endpoint": "https://gimme-ai-test2.modal.run",
+  "has_workflow": true,
+  "workflow_class_name": "GimmeAiTest2Workflow",
+  "observability": {
+    "enabled": "true",
+    "head_sampling_rate": "1.0",
+    "logs": {
+      "invocation_logs": "true"
+    }
+  }
+}

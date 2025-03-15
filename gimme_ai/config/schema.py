@@ -32,6 +32,20 @@ class Endpoints(BaseModel):
     prod: str = Field(..., description="Production endpoint URL")
 
 
+class WorkflowParam(BaseModel):
+    """Parameter for a workflow."""
+    name: str = Field(..., description="Parameter name")
+    type: str = Field("string", description="Parameter type")
+    required: bool = Field(False, description="Whether the parameter is required")
+
+class WorkflowConfig(BaseModel):
+    """Workflow configuration."""
+    enabled: bool = Field(False, description="Whether workflow is enabled")
+    class_name: Optional[str] = Field(None, description="Workflow class name")
+    params: List[WorkflowParam] = Field(default_factory=list, description="Workflow parameters")
+    has_r2_bucket: bool = Field(False, description="Whether the workflow needs R2 bucket access")
+
+
 class GimmeConfig(BaseModel):
     """Main configuration schema."""
 
@@ -45,6 +59,9 @@ class GimmeConfig(BaseModel):
     )
     admin_password_env: str = Field(
         "GIMME_ADMIN_PASSWORD", description="Admin password environment variable name"
+    )
+    workflow: Optional[WorkflowConfig] = Field(
+        None, description="Workflow configuration"
     )
 
     @field_validator("project_name")
@@ -130,6 +147,11 @@ def create_default_config(project_name: str) -> Dict[str, Any]:
             "allowed_origins": ["*"],  # Default to allow all origins
             "allowed_methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
             "allowed_headers": ["Content-Type", "Authorization"]
+        },
+        "workflow": {
+            "enabled": True,
+            "class_name": f"{project_name.title().replace('-', '')}Workflow",
+            "params": []
         }
     }
 
