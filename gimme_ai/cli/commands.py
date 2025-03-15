@@ -719,6 +719,116 @@ def test_command(endpoint: str, admin_password: Optional[str], env_file: str, co
             except Exception as e:
                 click.echo(f"⚠️ Error resetting rate limits: {e}")
 
+@cli.command(name="workflow")
+@click.option(
+    "--config-file",
+    default=".gimme-config.json",
+    help="Path to configuration file",
+    show_default=True,
+)
+@click.option(
+    "--env-file",
+    default=".env",
+    help="Path to environment file",
+    show_default=True,
+)
+@click.option(
+    "--endpoint",
+    help="Endpoint URL to test (e.g., https://your-project.workers.dev)",
+    required=True,
+)
+@click.option(
+    "--params",
+    help="JSON string of parameters to pass to the workflow",
+    default='{"requestId": "test-request"}',
+)
+@click.option(
+    "--check-status",
+    is_flag=True,
+    help="Check the status of a workflow instance",
+)
+@click.option(
+    "--instance-id",
+    help="Instance ID to check status for (when using --check-status)",
+)
+@click.option(
+    "--verbose",
+    is_flag=True,
+    help="Show detailed output",
+)
+def workflow_command(
+    config_file: str,
+    env_file: str,
+    endpoint: str,
+    params: str,
+    check_status: bool,
+    instance_id: Optional[str] = None,
+    verbose: bool = False,
+):
+    """Test a Cloudflare Workflow deployment."""
+    import json
+    import requests
+    from ..config import load_config
+    from ..utils.environment import load_env_file
+
+    try:
+        # Load configuration
+        config = load_config(config_file)
+        env_vars = load_env_file(env_file) if os.path.exists(env_file) else {}
+
+        # Prepare admin auth if available
+        headers = {
+            "Content-Type": "application/json"
+        }
+
+        if config.admin_password_env in env_vars:
+            headers["Authorization"] = f"Bearer {env_vars[config.admin_password_env]}"
+            if verbose:
+                click.echo("Using admin authentication")
+
+        if check_status:
+            if not instance_id:
+                click.echo("Error: --instance-id is required when using --check-status", err=True)
+                return
+
+            # Check workflow status
+            status_url = f"{endpoint}?instanceId={instance_id}"
+            if verbose:
+                click.echo(f"Checking status at: {status_url}")
+
+            response = requests.get(status_url, headers=headers)
+            click.echo(f"Status response ({response.status_code}):")
+            click.echo(json.dumps(response.json(), indent=2))
+
+        else:
+            # Parse parameters
+            try:
+                workflow_params = json.loads(params)
+            except json.JSONDecodeError:
+                click.echo(f"Error: Invalid JSON in params: {params}", err=True)
+                return
+
+            if verbose:
+                click.echo(f"Triggering workflow at: {endpoint}")
+                click.echo(f"Parameters: {json.dumps(workflow_params, indent=2)}")
+
+            # Trigger workflow
+            response = requests.post(endpoint, json=workflow_params, headers=headers)
+            result = response.json()
+
+            click.echo(f"Workflow triggered ({response.status_code}):")
+            click.echo(json.dumps(result, indent=2))
+
+            if response.status_code == 200 and "instanceId" in result:
+                click.echo("\nTo check status later, run:")
+                click.echo(f"gimme workflow --endpoint {endpoint} --check-status --instance-id {result['instanceId']}")
+
+    except Exception as e:
+        click.echo(f"Error: {str(e)}", err=True)
+        if verbose:
+            import traceback
+            click.echo(traceback.format_exc())
+
 # Register the deploy command
 cli.add_command(deploy_command)
 
@@ -726,3 +836,4 @@ cli.add_command(deploy_command)
 cli.add_command(init_command)
 cli.add_command(validate_command)
 cli.add_command(test_command)
+cli.add_command(workflow_command)

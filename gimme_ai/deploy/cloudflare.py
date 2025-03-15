@@ -13,7 +13,8 @@ from .templates import (
     render_template,
     load_template,
     save_template,
-    copy_project_files
+    copy_project_files,
+    generate_workflow_script
 )
 
 class DeploymentResult(NamedTuple):
@@ -74,8 +75,12 @@ def generate_deployment_files(config: GimmeConfig, output_dir: Optional[Path] = 
     # Generate Durable Objects script
     do_path = generate_durable_objects_script(config, output_dir)
 
+    # Generate workflow script
+    workflow_path = generate_workflow_script(config, output_dir)
+    print(f"Workflow script saved to: {workflow_path}")
+
     # Generate wrangler.toml
-    wrangler_path = generate_wrangler_toml(config, output_dir, has_project_files)
+    wrangler_path = generate_wrangler_toml(config, output_dir, has_workflow=True)
 
     return DeploymentResult(
         worker_script=worker_path,

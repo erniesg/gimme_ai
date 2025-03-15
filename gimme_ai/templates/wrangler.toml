@@ -1,7 +1,7 @@
 # gimme_ai/templates/wrangler.toml
 name = "{{ project_name }}"
 main = "worker.js"
-compatibility_date = "2023-05-15"
+compatibility_date = "2024-12-27"
 
 # Durable Objects bindings
 [[durable_objects.bindings]]
@@ -18,16 +18,20 @@ tag = "v1"
 new_classes = ["IPRateLimiter", "GlobalRateLimiter"]
 
 # Add workflow binding if project directory exists
-{% if has_project_files %}
+{% if has_workflow %}
 [[workflows]]
-name = "{{ project_name }}-workflow"
-binding = "VIDEO_WORKFLOW"
-class_name = "VideoGenerationWorkflow"
+name = "{{ project_name }}"
+binding = "{{ project_name | upper }}_WORKFLOW"
+class_name = "{{ workflow_class_name }}"
 {% endif %}
 
 # Add environment variables
 [vars]
 MODAL_ENDPOINT = "{{ prod_endpoint }}"
+{% for key in required_keys %}
+{{ key }} = "${{{ key }}}"
+{% endfor %}
+{{ admin_password_env }} = "${{{ admin_password_env }}}"
 
 # Documentation for environment variables
 # These are set as secrets using wrangler secret put
@@ -46,7 +50,7 @@ allow_credentials_in_env = true
 enabled = {{ observability.enabled }}
 head_sampling_rate = {{ observability.head_sampling_rate }}
 
-{% if observability.logs is defined %}
+{% if 'logs' in observability %}
 [observability.logs]
 invocation_logs = {{ observability.logs.invocation_logs }}
 {% endif %}

@@ -1,83 +1,131 @@
 // Workflow template for {{ project_name }}
-import { WorkflowEntrypoint, WorkflowStep, WorkflowEvent } from 'cloudflare:workers';
+import { WorkflowEntrypoint } from 'cloudflare:workers';
 
-type Env = {
-  // Add your bindings here
-  {{ project_name | upper }}_WORKFLOW: Workflow;
-  {% if has_r2_bucket %}
-  VIDEO_BUCKET: R2Bucket;
-  {% endif %}
-  {% for key in required_keys %}
-  {{ key }}: string;
-  {% endfor %}
-};
+// Define environment bindings
+// export type Env = {
+//   // Add your bindings here
+//   {{ project_name | upper }}_WORKFLOW: Workflow,
+//   {% for key in required_keys %}
+//   {{ key }}: string,
+//   {% endfor %}
+//   {% if has_r2_bucket %}
+//   {{ r2_bucket_name | default('STORAGE_BUCKET') }}: R2Bucket,
+//   {% endif %}
+// };
 
 // User-defined params passed to your workflow
-type Params = {
-  // Add your parameters here
-  requestId: string;
-  {% if workflow_params %}
-  {% for param in workflow_params %}
-  {{ param.name }}: {{ param.type }};
-  {% endfor %}
-  {% endif %}
-};
+// export type Params = { ... } becomes just a comment
+// Params = {
+//   // Parameters that can be passed to the workflow
+//   requestId?: string,
+//   email?: string,
+//   metadata?: Record<string, any>,
+//   {% if workflow_params %}
+//   {% for param in workflow_params %}
+//   {{ param.name }}?: {{ param.type }},
+//   {% endfor %}
+//   {% endif %}
+// };
 
-export class {{ workflow_class_name }} extends WorkflowEntrypoint<Env, Params> {
-  async run(event: WorkflowEvent<Params>, step: WorkflowStep) {
+export class {{ workflow_class_name }} extends WorkflowEntrypoint {
+  async run(event, step) {
     // Access parameters via event.payload
-    const requestId = event.payload.requestId;
+    const requestId = event.payload.requestId || crypto.randomUUID();
+    const email = event.payload.email;
+    const metadata = event.payload.metadata || {};
 
     // First step - initialization
     const initResult = await step.do('initialization', async () => {
       console.log(`Starting workflow for request ${requestId}`);
       return {
         startTime: new Date().toISOString(),
-        requestId: requestId
+        requestId: requestId,
+        parameters: {
+          email,
+          metadata
+        }
       };
     });
 
-    {% if has_r2_bucket %}
-    // Example step for R2 operations
-    const storageResult = await step.do(
-      'storage_operations',
+    // Example step with retry logic
+    const processResult = await step.do(
+      'process_request',
       {
         retries: {
           limit: 3,
           delay: '2 seconds',
           backoff: 'exponential',
         },
-        timeout: '5 minutes'
+        timeout: '1 minute'
       },
       async () => {
+        // Simulate some processing
+        console.log(`Processing request ${requestId} for ${email || 'unknown user'}`);
+
+        {% if has_r2_bucket %}
         // Example R2 operation
-        const bucketObjects = await this.env.VIDEO_BUCKET.list();
+        const bucketObjects = await this.env.{{ r2_bucket_name | default('STORAGE_BUCKET') }}.list();
+        console.log(`Found ${bucketObjects.objects.length} objects in bucket`);
+        {% endif %}
+
+        // Simulate API call
+        const response = await fetch('https://httpbin.org/anything', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            requestId,
+            email,
+            metadata,
+            timestamp: new Date().toISOString()
+          })
+        });
+
+        const result = await response.json();
+
         return {
-          objectCount: bucketObjects.objects.length,
-          objects: bucketObjects.objects.map(obj => obj.key).slice(0, 10) // First 10 objects
+          status: 'processed',
+          httpResponse: result,
+          processingTime: new Date().toISOString()
         };
       }
     );
-    {% endif %}
 
-    // Add your custom workflow steps here
+    // Add a delay step
+    await step.sleep('waiting_period', '5 seconds');
 
     // Final step - completion
-    await step.do('completion', async () => {
-      const duration = new Date().getTime() - new Date(initResult.startTime).getTime();
+    return await step.do('completion', async () => {
+      const startTime = new Date(initResult.startTime).getTime();
+      const endTime = new Date().getTime();
+      const duration = endTime - startTime;
+
       console.log(`Workflow for request ${requestId} completed in ${duration}ms`);
+
       return {
         status: 'completed',
-        duration: `${duration}ms`
+        requestId,
+        email,
+        duration: `${duration}ms`,
+        startTime: initResult.startTime,
+        endTime: new Date().toISOString(),
+        processResult
       };
     });
   }
 }
 
-// Optional HTTP handler to trigger the workflow
-export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
+// This is the main worker handler - it will be imported by your main worker.js
+// We don't export a default fetch handler to avoid conflicts
+export const workflowHandler = {
+  async fetch(request, env) {
     const url = new URL(request.url);
+
+    // Only handle requests to /workflow path
+    if (!url.pathname.startsWith('/workflow')) {
+      return new Response('Not found', { status: 404 });
+    }
 
     // Check for instance status requests
     const instanceId = url.searchParams.get('instanceId');
@@ -87,14 +135,17 @@ export default {
         const status = await instance.status();
         return Response.json({ status });
       } catch (error) {
-        return Response.json({ error: 'Invalid workflow instance ID' }, { status: 404 });
+        return Response.json({
+          error: 'Invalid workflow instance ID',
+          message: error instanceof Error ? error.message : String(error)
+        }, { status: 404 });
       }
     }
 
     // Create a new workflow instance
     try {
       // Parse request body for parameters
-      let params: Params = { requestId: crypto.randomUUID() };
+      let params = { requestId: crypto.randomUUID() };
 
       if (request.method === 'POST') {
         try {
@@ -102,6 +153,7 @@ export default {
           params = { ...params, ...body };
         } catch (e) {
           // If JSON parsing fails, continue with default params
+          console.error('Failed to parse request body:', e);
         }
       }
 
@@ -110,7 +162,8 @@ export default {
       return Response.json({
         success: true,
         message: 'Workflow started',
-        instanceId: instance.id
+        instanceId: instance.id,
+        params
       });
     } catch (error) {
       return Response.json({

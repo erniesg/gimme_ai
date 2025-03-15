@@ -229,7 +229,7 @@ def generate_wrangler_config(config: GimmeConfig) -> Dict[str, Any]:
 
     return wrangler_config
 
-def generate_wrangler_toml(config: GimmeConfig, output_dir: Path, has_project_files: bool = False) -> Path:
+def generate_wrangler_toml(config: GimmeConfig, output_dir: Path, has_project_files: bool = False, has_workflow: bool = False) -> Path:
     """
     Generate the wrangler.toml file content from configuration.
 
@@ -237,6 +237,7 @@ def generate_wrangler_toml(config: GimmeConfig, output_dir: Path, has_project_fi
         config: The application configuration
         output_dir: Path to the output directory
         has_project_files: Whether project-specific files were found
+        has_workflow: Whether to include workflow configuration
 
     Returns:
         Path to the saved wrangler.toml file
@@ -245,12 +246,16 @@ def generate_wrangler_toml(config: GimmeConfig, output_dir: Path, has_project_fi
     output_file = output_dir / "wrangler.toml"
 
     # Create context for template rendering
+    workflow_class_name = f"{config.project_name.title().replace('-', '')}Workflow"
+
     context = {
         "project_name": config.project_name,
         "required_keys": config.required_keys,
         "admin_password_env": config.admin_password_env,
         "has_project_files": has_project_files,
-        "prod_endpoint": config.endpoints.prod  # Add Modal endpoint
+        "prod_endpoint": config.endpoints.prod,
+        "has_workflow": True,  # Always include workflow support
+        "workflow_class_name": workflow_class_name
     }
 
     # Add observability settings if they exist in the config
@@ -290,3 +295,65 @@ def generate_wrangler_toml(config: GimmeConfig, output_dir: Path, has_project_fi
         print(f"Template: {template_content[:100]}...")
         print(f"Context: {context}")
         raise
+
+def generate_workflow_script(config: GimmeConfig, output_dir: Path) -> Path:
+    """
+    Generate the Cloudflare workflow script from configuration.
+
+    Args:
+        config: The application configuration
+        output_dir: Path to the output directory
+
+    Returns:
+        Path to the saved workflow script
+    """
+    # Load the workflow template from the package
+    template_path = Path(__file__).parent.parent / "templates" / "workflow.js"
+    template = load_template(template_path)
+
+    # Create the context for rendering
+    workflow_class_name = f"{config.project_name.title().replace('-', '')}Workflow"
+
+    context = {
+        "project_name": config.project_name,
+        "workflow_class_name": workflow_class_name,
+        "required_keys": config.required_keys,
+        "has_r2_bucket": getattr(config, 'has_r2_bucket', False),
+        "r2_bucket_name": getattr(config, 'r2_bucket_name', 'STORAGE_BUCKET'),
+        "workflow_params": getattr(config, 'workflow_params', [])
+    }
+
+    # Render the template
+    output_path = output_dir / "workflow.js"
+    save_template(template, context, output_path)
+    print(f"Workflow script saved to: {output_path}")
+
+    # Also update worker.js to import the workflow handler
+    worker_path = output_dir / "worker.js"
+    if worker_path.exists():
+        with open(worker_path, 'r') as f:
+            worker_content = f.read()
+
+        # Check if workflow import already exists
+        if "import { workflowHandler } from './workflow.js'" not in worker_content:
+            # Add import at the top after other imports
+            import_line = "import { workflowHandler } from './workflow.js';\n"
+            worker_content = worker_content.replace("// Configuration", f"{import_line}\n// Configuration")
+
+            # Add workflow route handling in the fetch function
+            workflow_handler = """
+    // Handle workflow requests
+    if (url.pathname.startsWith('/workflow')) {
+      return workflowHandler.fetch(request, env);
+    }
+"""
+            # Insert before the default handler
+            if "// Use default handler" in worker_content:
+                worker_content = worker_content.replace("// Use default handler", f"{workflow_handler}\n      // Use default handler")
+
+            with open(worker_path, 'w') as f:
+                f.write(worker_content)
+
+            print(f"Updated worker.js to include workflow handler")
+
+    return output_path
