@@ -98,9 +98,28 @@ export default {
 
     // Handle workflow requests
     if (path.startsWith('/workflow')) {
-      // Import the workflowHandler from workflow.js
-      const { workflowHandler } = await import('./workflow.js');
-      return workflowHandler.fetch(request, env);
+      try {
+        // Import the workflowHandler from workflow.js
+        const { workflowHandler } = await import('./workflow.js');
+
+        // Add debug logging for available bindings
+        console.log("Available env bindings:", Object.keys(env));
+        console.log("Looking for workflow binding:", "{{ project_name | upper | replace('-', '_') }}_WORKFLOW");
+
+        return workflowHandler.fetch(request, env);
+      } catch (error) {
+        console.error('Error handling workflow request:', error);
+        return new Response(JSON.stringify({
+          error: 'Workflow handler error',
+          message: String(error)
+        }), {
+          status: 500,
+          headers: {
+            "Content-Type": "application/json",
+            "Access-Control-Allow-Origin": "*"
+          }
+        });
+      }
     }
 
     // Step 4: Request handling - either project-specific or default

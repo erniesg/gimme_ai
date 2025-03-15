@@ -118,6 +118,8 @@ def generate_worker_script(config: GimmeConfig, output_dir: Path, has_project_fi
     template = load_template(template_path)
 
     # Create the context for rendering
+    workflow_binding = config.project_name.upper().replace('-', '_') + '_WORKFLOW'
+
     context = {
         "project_name": config.project_name,
         "dev_endpoint": config.endpoints.dev,
@@ -126,7 +128,8 @@ def generate_worker_script(config: GimmeConfig, output_dir: Path, has_project_fi
         "required_keys": config.required_keys,
         "limits": config.limits,
         "has_project_files": has_project_files,
-        "workflow_class_name": "VideoGenerationWorkflow"
+        "workflow_class_name": "VideoGenerationWorkflow",
+        "workflow_binding": workflow_binding
     }
 
     # Print debug info
@@ -325,11 +328,13 @@ def generate_workflow_script(config: GimmeConfig, output_dir: Path) -> Optional[
     template = load_template(template_path)
 
     # Create the context for rendering
-    workflow_class_name = getattr(workflow_config, 'class_name', None) or f"{config.project_name.title().replace('-', '')}Workflow"
+    workflow_class_name = "VideoGenerationWorkflow"
+    workflow_binding = config.project_name.upper().replace('-', '_') + '_WORKFLOW'
 
     context = {
         "project_name": config.project_name,
         "workflow_class_name": workflow_class_name,
+        "workflow_binding": workflow_binding,
         "required_keys": config.required_keys,
         "has_r2_bucket": getattr(workflow_config, 'has_r2_bucket', False),
         "r2_bucket_name": getattr(config, 'r2_bucket_name', 'STORAGE_BUCKET'),

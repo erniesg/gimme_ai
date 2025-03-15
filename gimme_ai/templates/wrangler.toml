@@ -20,7 +20,7 @@ new_classes = ["IPRateLimiter", "GlobalRateLimiter"]
 # Add workflow binding if project directory exists
 [[workflows]]
 name = "{{ project_name }}-workflow"
-binding = "{{ project_name | upper }}_WORKFLOW"
+binding = "{{ project_name | upper | replace('-', '_') }}_WORKFLOW"
 class_name = "VideoGenerationWorkflow"
 
 # Add environment variables
