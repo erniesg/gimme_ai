@@ -166,6 +166,11 @@ def test_rate_limits_command(
     default=True,
     help="Follow workflow execution by polling for status updates",
 )
+@click.option(
+    "--verbose", "-v",
+    is_flag=True,
+    help="Show detailed output",
+)
 def test_workflow_command(
     url: Optional[str],
     admin_password: Optional[str],
@@ -173,6 +178,7 @@ def test_workflow_command(
     config_file: str,
     params: str,
     follow: bool,
+    verbose: bool,
 ):
     """Test workflow functionality.
 
@@ -186,7 +192,7 @@ def test_workflow_command(
         click.echo("❌ Workflow is not enabled in configuration. Aborting test.")
         return
 
-    test_workflow(endpoint, admin_pw, config_file, True, params, follow)
+    test_workflow(endpoint, admin_pw, config_file, verbose, params, follow)
 
 @click.command(name="test-all")
 @click.argument("url", required=False)
@@ -679,47 +685,98 @@ def test_workflow(
                         click.echo(status_response.text)
                     return False
 
-                status_data = status_response.json()
-                status = status_data.get("status", {})
+                try:
+                    status_data = status_response.json()
+                except json.JSONDecodeError:
+                    click.echo("  ⚠️ Received non-JSON response:")
+                    click.echo(status_response.text)
+                    time.sleep(interval)
+                    continue
 
                 # Format the status nicely
                 click.echo(f"\n  ℹ️ Workflow status at {time.strftime('%H:%M:%S')}:")
-                if verbose:
-                    click.echo(json.dumps(status, indent=2))
-                else:
-                    # Simplified status
-                    current_status = status.get("status", "running")
-                    current_step = status.get("currentStep", "unknown")
-                    completed_steps = status.get("completedSteps", [])
-                    click.echo(f"  Status: {current_status}, Current step: {current_step}")
-                    if completed_steps:
-                        click.echo(f"  Completed steps: {', '.join(completed_steps)}")
 
-                # Check if workflow is completed
-                if status.get("status") == "completed":
+                if verbose:
+                    click.echo(f"  Full response: {json.dumps(status_data, indent=2)}")
+
+                # Show all fields for more context (extract nested values)
+                flat_status = {}
+
+                def flatten_dict(d, prefix=""):
+                    for k, v in d.items():
+                        if isinstance(v, dict):
+                            flatten_dict(v, f"{prefix}{k}.")
+                        elif not isinstance(v, list):
+                            flat_status[f"{prefix}{k}"] = v
+
+                if isinstance(status_data, dict):
+                    flatten_dict(status_data)
+
+                    # Print all fields
+                    for key, value in flat_status.items():
+                        click.echo(f"  {key}: {value}")
+                else:
+                    click.echo(f"  Raw status: {status_data}")
+
+                # Check for completion
+                status_complete = False
+                error_found = False
+
+                # Check different status patterns
+                # 1. Direct field check
+                if isinstance(status_data, dict):
+                    # Look for "complete" status directly
+                    if "status" in status_data and isinstance(status_data["status"], str):
+                        if status_data["status"].lower() in ["complete", "completed"]:
+                            status_complete = True
+
+                    # Look for nested status.status field
+                    if "status" in status_data and isinstance(status_data["status"], dict):
+                        if "status" in status_data["status"]:
+                            if status_data["status"]["status"].lower() in ["complete", "completed"]:
+                                status_complete = True
+
+                    # Look for output.status completed
+                    if "status" in status_data and isinstance(status_data["status"], dict):
+                        if "output" in status_data["status"] and isinstance(status_data["status"]["output"], dict):
+                            if "status" in status_data["status"]["output"]:
+                                if status_data["status"]["output"]["status"].lower() in ["complete", "completed"]:
+                                    status_complete = True
+
+                # 2. Check in flattened values
+                for key, value in flat_status.items():
+                    if "status" in key.lower() and isinstance(value, str):
+                        if value.lower() in ["complete", "completed"]:
+                            status_complete = True
+
+                    # Check for errors
+                    if "error" in key.lower() and value is not None and value != "None":
+                        error_found = True
+
+                # If we detected completion, break the loop
+                if status_complete and not error_found:
                     click.echo("\n  ✅ Workflow completed successfully!")
                     completed = True
-                    break
-                elif "error" in status:
-                    click.echo(f"\n  ❌ Workflow failed with error: {status.get('error')}")
+                    break  # Exit the polling loop
+                elif error_found:
+                    click.echo("\n  ❌ Workflow failed with error")
                     return False
 
                 # Wait before polling again
-                if verbose:
-                    click.echo(f"  ⏳ Waiting {interval} seconds before checking again...")
                 time.sleep(interval)
 
-            if not completed and time.time() - start_time >= timeout:
+            # After loop ends
+            if completed:
+                return True  # Success!
+            else:
                 click.echo(f"\n  ⚠️ Workflow execution follow timed out after {timeout} seconds")
                 click.echo(f"  You can check the status manually with:")
-                click.echo(f"  gimme-ai workflow --endpoint {endpoint} --check-status --instance-id {instance_id}")
+                click.echo(f"  gimme-ai workflow {endpoint} --check-status --instance-id {instance_id}")
                 return False
-
-            return completed
 
         elif "instanceId" in result:
             click.echo("\n  ℹ️ To check status later, run:")
-            click.echo(f"  gimme-ai workflow --endpoint {endpoint} --check-status --instance-id {result['instanceId']}")
+            click.echo(f"  gimme-ai workflow {endpoint} --check-status --instance-id {result['instanceId']}")
             return True
         else:
             return True

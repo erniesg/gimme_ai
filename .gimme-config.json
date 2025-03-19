@@ -7,8 +7,8 @@
   },
   "limits": {
     "free_tier": {
-      "per_ip": 10,
-      "global": 100,
+      "per_ip": 5,
+      "global": 10,
       "rate_window": "lifetime"
     }
   },
