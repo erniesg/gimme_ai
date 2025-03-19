@@ -117,7 +117,21 @@ def generate_worker_script(config: GimmeConfig, output_dir: Path, has_project_fi
     template_path = Path(__file__).parent.parent / "templates" / "worker.js"
     template = load_template(template_path)
 
-    # Create the context for rendering
+    # Derive workflow class name consistently
+    workflow_config = getattr(config, 'workflow', None)
+    workflow_class_name = getattr(workflow_config, 'class_name', None)
+    if not workflow_class_name and workflow_config and getattr(workflow_config, 'enabled', False):
+        # Convert project name to PascalCase for class name
+        project_parts = config.project_name.split('-')
+        workflow_class_name = ''.join(part.title() for part in project_parts) + 'Workflow'
+    elif not workflow_class_name:
+        # Default to VideoGenerationWorkflow if workflow is not enabled
+        workflow_class_name = "VideoGenerationWorkflow"
+
+    # Print debug output
+    print(f"Config workflow class name: {getattr(workflow_config, 'class_name', 'None')}")
+    print(f"Using workflow class name: {workflow_class_name}")
+
     workflow_binding = config.project_name.upper().replace('-', '_') + '_WORKFLOW'
 
     context = {
@@ -128,18 +142,26 @@ def generate_worker_script(config: GimmeConfig, output_dir: Path, has_project_fi
         "required_keys": config.required_keys,
         "limits": config.limits,
         "has_project_files": has_project_files,
-        "workflow_class_name": "VideoGenerationWorkflow",
-        "workflow_binding": workflow_binding
+        "workflow_class_name": workflow_class_name,
+        "workflow_binding": workflow_binding,
+        "workflow": workflow_config
     }
-
-    # Print debug info
-    print(f"Worker template path: {template_path}")
-    print(f"Worker template exists: {template_path.exists()}")
 
     # Render the template
     output_path = output_dir / "worker.js"
     save_template(template, context, output_path)
     print(f"Worker script saved to: {output_path}")
+
+    # Verify the worker script content
+    with open(output_path, 'r') as f:
+        worker_content = f.read()
+        import_line = f"import {{ {workflow_class_name}, workflowHandler }} from './workflow.js';"
+        if import_line in worker_content:
+            print(f"✅ Worker correctly imports {workflow_class_name}")
+        else:
+            print(f"❌ Worker does not correctly import {workflow_class_name}")
+            print(f"First 200 chars of worker.js: {worker_content[:200]}")
+
     return output_path
 
 def generate_durable_objects_script(config: GimmeConfig, output_dir: Optional[Path] = None) -> Path:
@@ -254,9 +276,12 @@ def generate_wrangler_toml(config: GimmeConfig, output_dir: Path, has_project_fi
     has_workflow = has_workflow or (workflow_config and getattr(workflow_config, 'enabled', False))
 
     # Create context for template rendering
-    workflow_class_name = "VideoGenerationWorkflow"
-    if workflow_config and workflow_config.class_name:
-        workflow_class_name = workflow_config.class_name
+    # Derive workflow class name from project name consistently
+    workflow_class_name = getattr(workflow_config, 'class_name', None)
+    if not workflow_class_name:
+        # Convert project name to PascalCase for class name
+        project_parts = config.project_name.split('-')
+        workflow_class_name = ''.join(part.title() for part in project_parts) + 'Workflow'
 
     context = {
         "project_name": config.project_name,
@@ -306,6 +331,55 @@ def generate_wrangler_toml(config: GimmeConfig, output_dir: Path, has_project_fi
         print(f"Context: {context}")
         raise
 
+def generate_workflow_utils_script(config: GimmeConfig, output_dir: Path) -> Optional[Path]:
+    """
+    Generate the Cloudflare workflow utilities script.
+
+    Args:
+        config: The application configuration
+        output_dir: Path to the output directory
+
+    Returns:
+        Path to the saved workflow utils script or None if workflow is not enabled
+    """
+    # Check if workflow is enabled
+    workflow_config = getattr(config, 'workflow', None)
+    if not workflow_config or not getattr(workflow_config, 'enabled', False):
+        print("Workflow is not enabled in configuration, skipping workflow utils script generation")
+        return None
+
+    # Load the workflow utils template from the package
+    template_path = Path(__file__).parent.parent / "templates" / "workflow_utils.js"
+
+    # Check if template exists
+    if not template_path.exists():
+        print(f"Workflow utils template not found at {template_path}")
+        return None
+
+    template = load_template(template_path)
+
+    # Create context with project name to ensure it's properly templated
+    context = {
+        "project_name": config.project_name
+    }
+
+    # Render the template
+    output_path = output_dir / "workflow_utils.js"
+    save_template(template, context, output_path)
+    print(f"Workflow utils script saved to: {output_path}")
+
+    # Verify the file was created successfully
+    if not output_path.exists():
+        print(f"ERROR: Failed to create workflow_utils.js at {output_path}")
+    else:
+        print(f"Successfully created workflow_utils.js at {output_path}")
+        # Print file size and first few lines for debugging
+        print(f"File size: {output_path.stat().st_size} bytes")
+        with open(output_path, 'r') as f:
+            print(f"File content preview: {f.read(100)}...")
+
+    return output_path
+
 def generate_workflow_script(config: GimmeConfig, output_dir: Path) -> Optional[Path]:
     """
     Generate the Cloudflare workflow script from configuration.
@@ -328,17 +402,33 @@ def generate_workflow_script(config: GimmeConfig, output_dir: Path) -> Optional[
     template = load_template(template_path)
 
     # Create the context for rendering
-    workflow_class_name = "VideoGenerationWorkflow"
+    # Derive workflow class name from project name consistently
+    workflow_class_name = getattr(workflow_config, 'class_name', None)
+    if not workflow_class_name:
+        # Convert project name to PascalCase for class name
+        project_parts = config.project_name.split('-')
+        workflow_class_name = ''.join(part.title() for part in project_parts) + 'Workflow'
+
     workflow_binding = config.project_name.upper().replace('-', '_') + '_WORKFLOW'
+
+    # Get workflow steps from config if available
+    workflow_steps = getattr(workflow_config, 'steps', [])
+
+    # Get workflow defaults from config
+    workflow_defaults = getattr(workflow_config, 'defaults', {
+        'retry_limit': 3,
+        'timeout': '5m',
+        'polling_interval': '5s',
+        'method': 'POST'
+    })
 
     context = {
         "project_name": config.project_name,
         "workflow_class_name": workflow_class_name,
         "workflow_binding": workflow_binding,
         "required_keys": config.required_keys,
-        "has_r2_bucket": getattr(workflow_config, 'has_r2_bucket', False),
-        "r2_bucket_name": getattr(config, 'r2_bucket_name', 'STORAGE_BUCKET'),
-        "workflow_params": getattr(workflow_config, 'params', [])
+        "workflow_steps": workflow_steps,
+        "workflow_defaults": workflow_defaults
     }
 
     # Render the template

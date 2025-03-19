@@ -14,7 +14,8 @@ from .templates import (
     load_template,
     save_template,
     copy_project_files,
-    generate_workflow_script
+    generate_workflow_script,
+    generate_workflow_utils_script
 )
 
 class DeploymentResult(NamedTuple):
@@ -23,6 +24,7 @@ class DeploymentResult(NamedTuple):
     durable_objects_script: Path
     wrangler_config: Path
     workflow_script: Path = None
+    workflow_utils_script: Path = None
 
 class DeploymentStatus(NamedTuple):
     """Result of a deployment operation."""
@@ -70,24 +72,46 @@ def generate_deployment_files(config: GimmeConfig, output_dir: Optional[Path] = 
     if has_project_files:
         print(f"Project-specific files for {config.project_name} were included in the deployment")
 
-    # Generate worker script
-    worker_path = generate_worker_script(config, output_dir, has_project_files)
-
     # Generate Durable Objects script
     do_path = generate_durable_objects_script(config, output_dir)
 
-    # Generate workflow script
-    workflow_path = generate_workflow_script(config, output_dir)
-    print(f"Workflow script saved to: {workflow_path}")
+    # If workflow is enabled, generate workflow-related files
+    workflow_utils_path = None
+    workflow_path = None
+
+    workflow_config = getattr(config, 'workflow', None)
+    if workflow_config and getattr(workflow_config, 'enabled', True):
+        # Generate workflow utils script first so it can be imported by workflow.js
+        workflow_utils_path = generate_workflow_utils_script(config, output_dir)
+        print(f"Workflow utils script saved to: {workflow_utils_path}")
+
+        # Verify the file was created
+        if workflow_utils_path and workflow_utils_path.exists():
+            print(f"Workflow utils file exists at: {workflow_utils_path}")
+            # Print file size for debugging
+            print(f"Workflow utils file size: {workflow_utils_path.stat().st_size} bytes")
+        else:
+            print("WARNING: workflow_utils.js was not created or does not exist")
+
+        # Generate workflow script after utils so it can import it
+        workflow_path = generate_workflow_script(config, output_dir)
+        print(f"Workflow script saved to: {workflow_path}")
+
+    # Generate worker script
+    worker_path = generate_worker_script(config, output_dir, has_project_files)
 
     # Generate wrangler.toml
-    wrangler_path = generate_wrangler_toml(config, output_dir, has_workflow=True)
+    wrangler_path = generate_wrangler_toml(config, output_dir, has_workflow=bool(workflow_path))
+
+    # List all files in the output directory to verify
+    print(f"Files in output directory: {[f.name for f in output_dir.iterdir()]}")
 
     return DeploymentResult(
         worker_script=worker_path,
         durable_objects_script=do_path,
         wrangler_config=wrangler_path,
-        workflow_script=workflow_path
+        workflow_script=workflow_path,
+        workflow_utils_script=workflow_utils_path
     )
 
 def deploy_to_cloudflare(config: GimmeConfig, deployment_files: Optional[DeploymentResult] = None) -> DeploymentStatus:
@@ -127,7 +151,7 @@ def deploy_to_cloudflare(config: GimmeConfig, deployment_files: Optional[Deploym
     if deployment_files is None:
         deployment_files = generate_deployment_files(config, output_dir)
 
-    # Verify that required files exist - ONLY check worker.js and durable_objects.js
+    # Verify that required files exist - check for all necessary files
     required_files = [deployment_files.worker_script, deployment_files.durable_objects_script]
 
     for file_path in required_files:
@@ -140,23 +164,40 @@ def deploy_to_cloudflare(config: GimmeConfig, deployment_files: Optional[Deploym
         else:
             logger.info(f"Found required file: {file_path}")
 
-    # Check if workflow file exists, but don't fail if it doesn't
-    if deployment_files.workflow_script and deployment_files.workflow_script.exists():
-        logger.info(f"Found workflow file: {deployment_files.workflow_script}")
-    else:
-        # Generate the workflow file directly here to ensure it exists
-        workflow_path = generate_workflow_script(config, output_dir)
-        if workflow_path and workflow_path.exists():
-            logger.info(f"Generated workflow file: {workflow_path}")
-            # Update the deployment_files with the new workflow path
+    # Check if workflow files exist, and ensure both are generated if workflow is enabled
+    workflow_config = getattr(config, 'workflow', None)
+    if workflow_config and getattr(workflow_config, 'enabled', False):
+        # Ensure both workflow.js and workflow_utils.js exist
+        workflow_path = deployment_files.workflow_script
+        workflow_utils_path = deployment_files.workflow_utils_script
+
+        # Generate workflow.js if missing
+        if not workflow_path or not workflow_path.exists():
+            logger.info("Workflow is enabled but workflow.js is missing, generating it...")
+            workflow_path = generate_workflow_script(config, output_dir)
+            if not workflow_path or not workflow_path.exists():
+                logger.warning("Failed to generate workflow.js, workflow may not function correctly")
+        else:
+            logger.info(f"Found workflow file: {workflow_path}")
+
+        # Generate workflow_utils.js if missing
+        if not workflow_utils_path or not workflow_utils_path.exists():
+            logger.info("Workflow is enabled but workflow_utils.js is missing, generating it...")
+            workflow_utils_path = generate_workflow_utils_script(config, output_dir)
+            if not workflow_utils_path or not workflow_utils_path.exists():
+                logger.warning("Failed to generate workflow_utils.js, workflow may not function correctly")
+        else:
+            logger.info(f"Found workflow utils file: {workflow_utils_path}")
+
+        # Update deployment_files with the new paths
+        if workflow_path and workflow_utils_path:
             deployment_files = DeploymentResult(
                 worker_script=deployment_files.worker_script,
                 durable_objects_script=deployment_files.durable_objects_script,
                 wrangler_config=deployment_files.wrangler_config,
-                workflow_script=workflow_path
+                workflow_script=workflow_path,
+                workflow_utils_script=workflow_utils_path
             )
-        else:
-            logger.warning("Could not generate workflow file, continuing without it")
 
     # Change to the directory with the deployment files
     original_dir = os.getcwd()

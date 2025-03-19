@@ -15,6 +15,8 @@ from .templates import (
     generate_worker_script,
     generate_durable_objects_script,
     generate_wrangler_config,
+    generate_workflow_script,
+    generate_workflow_utils_script
 )
 
 __all__ = [
@@ -29,4 +31,6 @@ __all__ = [
     "generate_worker_script",
     "generate_durable_objects_script",
     "generate_wrangler_config",
+    "generate_workflow_script",
+    "generate_workflow_utils_script"
 ]

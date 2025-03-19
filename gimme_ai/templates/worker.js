@@ -1,11 +1,11 @@
 // Main Worker Script for API Gateway
 // Handles authentication, rate limiting, and request forwarding
 import { IPRateLimiter, GlobalRateLimiter } from './durable_objects.js';
-import { VideoGenerationWorkflow } from './workflow.js';
+import { {{ workflow_class_name }}, workflowHandler } from './workflow.js';
 
 {% if workflow and workflow.enabled %}
 // Export the workflow class to make it available to the runtime
-export { VideoGenerationWorkflow };
+export { {{ workflow_class_name }} };
 {% endif %}
 
 // Configuration
@@ -99,10 +99,7 @@ export default {
     // Handle workflow requests
     if (path.startsWith('/workflow')) {
       try {
-        // Import the workflowHandler from workflow.js
-        const { workflowHandler } = await import('./workflow.js');
-
-        // Add debug logging for available bindings
+        // Use the imported workflowHandler
         console.log("Available env bindings:", Object.keys(env));
         console.log("Looking for workflow binding:", "{{ project_name | upper | replace('-', '_') }}_WORKFLOW");
 
@@ -520,8 +517,5 @@ function handleStatusRequest(env, clientIP, isAdmin) {
   });
 }
 
-// IMPORTANT: Export the workflow class
-export { VideoGenerationWorkflow };
-
-// Export the rate limiters
+// Export only the rate limiters (removed duplicate workflow export)
 export { IPRateLimiter, GlobalRateLimiter };

@@ -17,11 +17,13 @@ class_name = "GlobalRateLimiter"
 tag = "v1"
 new_classes = ["IPRateLimiter", "GlobalRateLimiter"]
 
-# Add workflow binding if project directory exists
+# Add workflow binding if workflow is enabled
+{% if has_workflow %}
 [[workflows]]
 name = "{{ project_name }}-workflow"
 binding = "{{ project_name | upper | replace('-', '_') }}_WORKFLOW"
-class_name = "VideoGenerationWorkflow"
+class_name = "{{ workflow_class_name }}"
+{% endif %}
 
 # Add environment variables
 [vars]
@@ -33,11 +35,6 @@ MODAL_ENDPOINT = "{{ prod_endpoint }}"
 # {{ key }} is available as env.{{ key }}
 {% endfor %}
 # {{ admin_password_env }} is available as env.{{ admin_password_env }}
-
-# Security settings
-[security]
-# Ensure secrets are properly handled
-allow_credentials_in_env = true
 
 # Observability settings for logging
 [observability]
