@@ -17,6 +17,7 @@ from .templates import (
     generate_workflow_script,
     generate_workflow_utils_script
 )
+import shutil
 
 class DeploymentResult(NamedTuple):
     """Result of generating deployment files."""
@@ -136,7 +137,6 @@ def deploy_to_cloudflare(config: GimmeConfig, deployment_files: Optional[Deploym
         )
 
     # Determine output directory
-    output_dir = None
     if hasattr(config, 'output_dir') and config.output_dir:
         output_dir = Path(config.output_dir)
     else:
@@ -167,37 +167,24 @@ def deploy_to_cloudflare(config: GimmeConfig, deployment_files: Optional[Deploym
     # Check if workflow files exist, and ensure both are generated if workflow is enabled
     workflow_config = getattr(config, 'workflow', None)
     if workflow_config and getattr(workflow_config, 'enabled', False):
-        # Ensure both workflow.js and workflow_utils.js exist
-        workflow_path = deployment_files.workflow_script
-        workflow_utils_path = deployment_files.workflow_utils_script
+        # Check if workflow_utils.js and workflow.js exist
+        workflow_utils_path = output_dir / 'workflow_utils.js'
+        workflow_path = output_dir / 'workflow.js'
 
-        # Generate workflow.js if missing
-        if not workflow_path or not workflow_path.exists():
-            logger.info("Workflow is enabled but workflow.js is missing, generating it...")
-            workflow_path = generate_workflow_script(config, output_dir)
-            if not workflow_path or not workflow_path.exists():
-                logger.warning("Failed to generate workflow.js, workflow may not function correctly")
-        else:
-            logger.info(f"Found workflow file: {workflow_path}")
+        if not workflow_utils_path.exists() or not workflow_path.exists():
+            logger.info("Essential workflow files missing, generating them")
+            from ..deploy.templates import ensure_workflow_files
+            ensure_workflow_files(config, output_dir)
 
-        # Generate workflow_utils.js if missing
-        if not workflow_utils_path or not workflow_utils_path.exists():
-            logger.info("Workflow is enabled but workflow_utils.js is missing, generating it...")
-            workflow_utils_path = generate_workflow_utils_script(config, output_dir)
-            if not workflow_utils_path or not workflow_utils_path.exists():
-                logger.warning("Failed to generate workflow_utils.js, workflow may not function correctly")
-        else:
-            logger.info(f"Found workflow utils file: {workflow_utils_path}")
-
-        # Update deployment_files with the new paths
-        if workflow_path and workflow_utils_path:
-            deployment_files = DeploymentResult(
-                worker_script=deployment_files.worker_script,
-                durable_objects_script=deployment_files.durable_objects_script,
-                wrangler_config=deployment_files.wrangler_config,
-                workflow_script=workflow_path,
-                workflow_utils_script=workflow_utils_path
-            )
+            # Update deployment_files with new paths
+            if workflow_path.exists() and workflow_utils_path.exists():
+                deployment_files = DeploymentResult(
+                    worker_script=deployment_files.worker_script,
+                    durable_objects_script=deployment_files.durable_objects_script,
+                    wrangler_config=deployment_files.wrangler_config,
+                    workflow_script=workflow_path,
+                    workflow_utils_script=workflow_utils_path
+                )
 
     # Change to the directory with the deployment files
     original_dir = os.getcwd()
@@ -205,6 +192,31 @@ def deploy_to_cloudflare(config: GimmeConfig, deployment_files: Optional[Deploym
 
     # List all files in the directory to verify
     logger.info(f"Files in deployment directory: {os.listdir('.')}")
+
+    # Check for handlers directory
+    if os.path.exists('handlers'):
+        logger.info(f"Handlers directory exists with files: {os.listdir('handlers')}")
+
+        # CRITICAL FIX: Check for video_workflow.js in handlers
+        if 'video_workflow.js' not in os.listdir('handlers'):
+            logger.warning("video_workflow.js is missing from handlers directory!")
+
+            # Try to find and copy it
+            video_template_paths = [
+                Path(original_dir) / "gimme_ai" / "templates" / "handlers" / "video_workflow.js",
+                Path(original_dir) / "templates" / "handlers" / "video_workflow.js",
+                Path(__file__).parent.parent / "templates" / "handlers" / "video_workflow.js"
+            ]
+
+            for template_path in video_template_paths:
+                if template_path.exists():
+                    logger.info(f"Found video_workflow.js at {template_path}")
+                    # Create handlers directory if it doesn't exist
+                    os.makedirs('handlers', exist_ok=True)
+                    # Copy the file
+                    shutil.copy2(template_path, 'handlers/video_workflow.js')
+                    logger.info("Successfully copied video_workflow.js to handlers directory")
+                    break
 
     try:
         # Prepare environment variables for wrangler
@@ -214,7 +226,7 @@ def deploy_to_cloudflare(config: GimmeConfig, deployment_files: Optional[Deploym
         loaded_vars = {}
         try:
             from ..utils.environment import load_env_file
-            env_file = os.path.join(original_dir, ".env")
+            env_file = os.path.join(os.getcwd(), ".env")
             if os.path.exists(env_file):
                 logger.info(f"Loading environment variables from {env_file}")
                 loaded_vars = load_env_file(env_file)
@@ -360,6 +372,3 @@ def deploy_to_cloudflare(config: GimmeConfig, deployment_files: Optional[Deploym
             success=False,
             message=f"Error during deployment: {e}"
         )
-    finally:
-        # Change back to original directory
-        os.chdir(original_dir)

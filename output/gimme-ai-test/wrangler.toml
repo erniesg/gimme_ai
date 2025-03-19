@@ -1,0 +1,48 @@
+# gimme_ai/templates/wrangler.toml
+name = "gimme-ai-test"
+main = "worker.js"
+compatibility_date = "2023-05-15"
+
+# Durable Objects bindings
+[[durable_objects.bindings]]
+name = "IP_LIMITER"
+class_name = "IPRateLimiter"
+
+[[durable_objects.bindings]]
+name = "GLOBAL_LIMITER"
+class_name = "GlobalRateLimiter"
+
+# Migrations for Durable Objects
+[[migrations]]
+tag = "v1"
+new_classes = ["IPRateLimiter", "GlobalRateLimiter"]
+
+# Add workflow binding if workflow is enabled
+
+[[workflows]]
+name = "gimme-ai-test-workflow"
+binding = "GIMME_AI_TEST_WORKFLOW"
+class_name = "GimmeAiTestWorkflow"
+
+
+# Add environment variables
+[vars]
+MODAL_ENDPOINT = "https://berlayar-ai--wanx-backend-app-function.modal.run"
+
+# Documentation for environment variables
+# These are set as secrets using wrangler secret put
+
+# MODAL_TOKEN_ID is available as env.MODAL_TOKEN_ID
+
+# MODAL_TOKEN_SECRET is available as env.MODAL_TOKEN_SECRET
+
+# GIMME_ADMIN_PASSWORD is available as env.GIMME_ADMIN_PASSWORD
+
+# Observability settings for logging
+[observability]
+enabled = true
+head_sampling_rate = 1.0
+
+
+[observability.logs]
+invocation_logs = true

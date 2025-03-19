@@ -478,24 +478,81 @@ def generate_workflow_script(config: GimmeConfig, output_dir: Optional[Path] = N
     handlers_dir = output_dir / 'handlers'
     handlers_dir.mkdir(exist_ok=True)
 
-    # Generate appropriate handler based on workflow type
-    if workflow_type == 'video':
+    # Add these debug statements right at the start
+    print(f"DEBUG: Starting workflow script generation")
+    print(f"DEBUG: Output directory is {output_dir}")
+    print(f"DEBUG: Workflow type is {getattr(workflow_config, 'type', 'api')}")
+
+    # Then, when handling video workflow:
+    if workflow_type == 'video' or workflow_type == 'dual':
         video_handler_template_path = TEMPLATES_DIR / 'handlers' / 'video_workflow.js'
+        print(f"DEBUG: Looking for video template at: {video_handler_template_path}")
+        print(f"DEBUG: Template exists: {video_handler_template_path.exists()}")
+
         if video_handler_template_path.exists():
-            video_handler_js = video_handler_template_path.read_text()
-            video_handler_js_path = handlers_dir / 'video_workflow.js'
-            video_handler_js_path.write_text(video_handler_js)
-            print(f"Generated video workflow handler at {video_handler_js_path}")
-    elif workflow_type == 'api':
+            # Check the file is readable and not empty
+            try:
+                content = video_handler_template_path.read_text()
+                print(f"DEBUG: Template file size: {len(content)} bytes")
+                print(f"DEBUG: First 100 chars: {content[:100]}")
+            except Exception as e:
+                print(f"DEBUG: Error reading template: {e}")
+
+    if workflow_type == 'api' or workflow_type == 'dual':
         api_handler_template_path = TEMPLATES_DIR / 'handlers' / 'api_workflow.js'
         if api_handler_template_path.exists():
             api_handler_js = api_handler_template_path.read_text()
             api_handler_js_path = handlers_dir / 'api_workflow.js'
             api_handler_js_path.write_text(api_handler_js)
             print(f"Generated API workflow handler at {api_handler_js_path}")
+        else:
+            print(f"WARNING: API workflow template not found at {api_handler_template_path}")
 
     # Also generate the workflow utils
     generate_workflow_utils_script(config, output_dir)
 
     print(f"Generated workflow.js at {workflow_js_path}")
     return workflow_js_path
+
+def ensure_workflow_files(config, output_dir):
+    """
+    Ensure all workflow files are properly generated and copied.
+    This is a convenience function to call from deployment scripts.
+    """
+    # Ensure directories exist
+    handlers_dir = output_dir / 'handlers'
+    handlers_dir.mkdir(exist_ok=True)
+
+    # Get workflow type
+    workflow_config = getattr(config, 'workflow', None)
+    if not workflow_config or not getattr(workflow_config, 'enabled', False):
+        return False
+
+    workflow_type = getattr(workflow_config, 'type', 'api')
+
+    # Generate workflow utils
+    workflow_utils_path = generate_workflow_utils_script(config, output_dir)
+
+    # Generate workflow script
+    workflow_js_path = generate_workflow_script(config, output_dir)
+
+    # Explicitly handle the video workflow handler for dual or video types
+    if workflow_type in ['dual', 'video']:
+        # Try multiple potential locations for the template
+        template_paths = [
+            Path(__file__).parent.parent / "templates" / "handlers" / "video_workflow.js",
+            Path("templates/handlers/video_workflow.js"),
+            Path(__file__).parent.parent.parent / "templates" / "handlers" / "video_workflow.js"
+        ]
+
+        for template_path in template_paths:
+            if template_path.exists():
+                video_handler_path = handlers_dir / 'video_workflow.js'
+                try:
+                    shutil.copy(template_path, video_handler_path)
+                    print(f"Successfully copied video handler from {template_path}")
+                    break
+                except Exception as e:
+                    print(f"Error copying from {template_path}: {e}")
+
+    return True

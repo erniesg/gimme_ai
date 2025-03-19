@@ -1,0 +1,13 @@
+STDOUT:
+
+ ⛅️ wrangler 4.0.0 (update available 4.1.0)
+-------------------------------------------
+
+
+
+
+STDERR:
+[31m✘ [41;31m[[41;97mERROR[41;31m][0m [1mMissing entry-point: The entry-point should be specified via the command line (e.g. `wrangler deploy path/to/script`) or the `main` config field.[0m
+
+
+🪵  Logs were written to "/Users/erniesg/Library/Preferences/.wrangler/logs/wrangler-2025-03-19_09-20-16_912.log"

@@ -1,0 +1,25 @@
+STDOUT:
+
+ ⛅️ wrangler 4.0.0 (update available 4.1.0)
+-------------------------------------------
+
+Total Upload: 25.94 KiB / gzip: 5.04 KiB
+Your worker has access to the following bindings:
+- Durable Objects:
+  - IP_LIMITER: IPRateLimiter
+  - GLOBAL_LIMITER: GlobalRateLimiter
+- Workflows:
+  - GIMME_AI_TEST_WORKFLOW: GimmeAiTestWorkflow
+- Vars:
+  - MODAL_ENDPOINT: "https://berlayar-ai--wanx-backend-app..."
+Uploaded gimme-ai-test (2.97 sec)
+Deployed gimme-ai-test triggers (1.65 sec)
+  https://gimme-ai-test.erniesg.workers.dev
+  workflow: gimme-ai-test-workflow
+Current Version ID: 406d1392-ab85-4645-914f-9b58dd4bd609
+
+
+STDERR:
+[33m▲ [43;33m[[43;30mWARNING[43;33m][0m [1mWorkflows is currently in open beta.[0m
+
+

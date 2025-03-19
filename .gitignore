@@ -2,7 +2,7 @@
 *.pyc
 
 # Ignore output directory
-output/
+# output/
 
 # Ignore .python-version file
 .python-version

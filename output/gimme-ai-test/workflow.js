@@ -1,22 +1,15 @@
-// Workflow template for {{ project_name }}
+// Workflow template for gimme-ai-test
 import { WorkflowEntrypoint } from 'cloudflare:workers';
 import * as WorkflowUtils from './workflow_utils.js';
 
 // Import specialized handlers
-{% if workflow.type == 'video' %}
-import videoWorkflowHandler from './handlers/video_workflow.js';
-{% elif workflow.type == 'api' %}
+
 import apiWorkflowHandler from './handlers/api_workflow.js';
-{% elif workflow.type == 'dual' %}
-import apiWorkflowHandler from './handlers/api_workflow.js';
-import videoWorkflowHandler from './handlers/video_workflow.js';
-{% elif workflow.type == 'custom' %}
-import customWorkflowHandler from './handlers/custom_workflow.js';
-{% endif %}
+
 
 // Workflow configuration - this will be replaced with actual config during deployment
 const WORKFLOW_CONFIG = {
-  type: "{{ workflow.type | default('api') }}",
+  type: "api",
   steps: [],
   defaults: {
     retry_limit: 3,
@@ -25,15 +18,15 @@ const WORKFLOW_CONFIG = {
     method: "POST"
   },
   endpoints: {
-    dev: "{{ endpoints.dev }}",
-    prod: "{{ endpoints.prod }}"
+    dev: "http://localhost:8000",
+    prod: "https://berlayar-ai--wanx-backend-app-function.modal.run"
   }
 };
 
 /**
- * {{ workflow_class_name }} - A workflow for {{ project_name }}
+ * GimmeAiTestWorkflow - A workflow for gimme-ai-test
  */
-export class {{ workflow_class_name }} extends WorkflowEntrypoint {
+export class GimmeAiTestWorkflow extends WorkflowEntrypoint {
   /**
    * Run the workflow
    */
@@ -126,7 +119,7 @@ export const workflowHandler = {
     console.log("Workflow handler received path:", path);
 
     // Set project name in env for handlers to use
-    env.PROJECT_NAME = "{{ project_name }}";
+    env.PROJECT_NAME = "gimme-ai-test";
 
     // Handle workflow API route
     if (path.startsWith('/workflow')) {

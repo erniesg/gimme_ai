@@ -1,0 +1,21 @@
+STDOUT:
+
+ ⛅️ wrangler 4.0.0 (update available 4.1.0)
+-------------------------------------------
+
+Total Upload: 25.94 KiB / gzip: 5.04 KiB
+Your worker has access to the following bindings:
+- Durable Objects:
+  - IP_LIMITER: IPRateLimiter
+  - GLOBAL_LIMITER: GlobalRateLimiter
+- Workflows:
+  - GIMME_AI_TEST_WORKFLOW: GimmeAiTestWorkflow
+- Vars:
+  - MODAL_ENDPOINT: "https://berlayar-ai--wanx-backend-app..."
+--dry-run: exiting now.
+
+
+STDERR:
+[33m▲ [43;33m[[43;30mWARNING[43;33m][0m [1mWorkflows is currently in open beta.[0m
+
+
