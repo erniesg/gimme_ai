@@ -123,59 +123,55 @@ def deploy_command(
             logger.error("npm install -g wrangler")
             sys.exit(1)
 
-    # Generate deployment files
-    logger.info("Generating deployment files...")
+    # Read workflow type directly from config
+    workflow_type = "disabled"
+    if hasattr(config, 'workflow') and getattr(config.workflow, 'enabled', False):
+        workflow_type = getattr(config.workflow, 'type', 'dual')
+        logger.info(f"Using workflow type from config: {workflow_type}")
+
+    # Pass the workflow type to generate_deployment_files
+    deployment_files = generate_deployment_files(config, output_path)
+
+    logger.info(f"Worker script: {deployment_files.worker_script}")
+    logger.info(f"Durable Objects script: {deployment_files.durable_objects_script}")
+    logger.info(f"Wrangler config: {deployment_files.wrangler_config}")
+
+    if deployment_files.workflow_script:
+        logger.info(f"Workflow script: {deployment_files.workflow_script}")
+
+    if deployment_files.workflow_utils_script:
+        logger.info(f"Workflow utils script: {deployment_files.workflow_utils_script}")
+
+    # If dry run, exit here
+    if dry_run:
+        logger.info("\nDry run completed. Files generated but not deployed.")
+        return
+
+    # Deploy to Cloudflare
+    logger.info("\nDeploying to Cloudflare...")
     try:
-        # Pass the output_path to the generation functions
-        worker_script_path = generate_worker_script(config, output_path)
-        durable_objects_script_path = generate_durable_objects_script(config, output_path)
-        wrangler_config_path = generate_wrangler_toml(config, output_path)
+        # Call deploy_to_cloudflare with the config
+        result = deploy_to_cloudflare(config)
 
-        logger.info(f"Worker script generated: {worker_script_path}")
-        logger.info(f"Durable Objects script generated: {durable_objects_script_path}")
-        logger.info(f"Wrangler config generated: {wrangler_config_path}")
+        if result.success:
+            logger.info(f"\n✅ {result.message}")
+            if result.url:
+                logger.info(f"\nYour API gateway is available at: {result.url}")
+                logger.info("\nYou can now use this URL in your frontend applications.")
 
-        # If dry run, exit here
-        if dry_run:
-            logger.info("\nDry run completed. Files generated but not deployed.")
-            return
+            # Output usage examples
+            logger.info("\nUsage examples:")
+            logger.info("  Free tier access:")
+            logger.info(f"  fetch('{result.url or 'https://your-gateway.workers.dev'}/your-endpoint')")
 
-        # Deploy to Cloudflare
-        logger.info("\nDeploying to Cloudflare...")
-        try:
-            # Create a DeploymentResult object with the paths to the generated files
-            deployment_files = DeploymentResult(
-                worker_script=worker_script_path,
-                durable_objects_script=durable_objects_script_path,
-                wrangler_config=wrangler_config_path
-            )
-
-            # Call deploy_to_cloudflare with the config and deployment_files
-            result = deploy_to_cloudflare(config, deployment_files)
-
-            if result.success:
-                logger.info(f"\n✅ {result.message}")
-                if result.url:
-                    logger.info(f"\nYour API gateway is available at: {result.url}")
-                    logger.info("\nYou can now use this URL in your frontend applications.")
-
-                # Output usage examples
-                logger.info("\nUsage examples:")
-                logger.info("  Free tier access:")
-                logger.info(f"  fetch('{result.url or 'https://your-gateway.workers.dev'}/your-endpoint')")
-
-                logger.info("\n  Admin access:")
-                logger.info(f"  fetch('{result.url or 'https://your-gateway.workers.dev'}/your-endpoint', {{")
-                logger.info("    headers: {")
-                logger.info("      'Authorization': 'Bearer your-admin-password'")
-                logger.info("    }")
-                logger.info("  })")
-            else:
-                logger.error(f"\n❌ {result.message}")
-                sys.exit(1)
-
-        except Exception as e:
-            logger.error(f"Error during deployment: {e}")
+            logger.info("\n  Admin access:")
+            logger.info(f"  fetch('{result.url or 'https://your-gateway.workers.dev'}/your-endpoint', {{")
+            logger.info("    headers: {")
+            logger.info("      'Authorization': 'Bearer your-admin-password'")
+            logger.info("    }")
+            logger.info("  })")
+        else:
+            logger.error(f"\n❌ {result.message}")
             sys.exit(1)
 
     except Exception as e:

@@ -3,6 +3,9 @@
 
 from typing import Dict, List, Optional, Any, Union
 from pydantic import BaseModel, Field, field_validator
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class RateLimits(BaseModel):
@@ -44,6 +47,9 @@ class WorkflowConfig(BaseModel):
     class_name: Optional[str] = Field(None, description="Workflow class name")
     params: List[WorkflowParam] = Field(default_factory=list, description="Workflow parameters")
     has_r2_bucket: bool = Field(False, description="Whether the workflow needs R2 bucket access")
+    type: str = Field("dual", description="Workflow type: api, video, or dual")
+    config_file: Optional[str] = Field(None, description="Path to workflow configuration file")
+    steps: List[Dict[str, Any]] = Field(default_factory=list, description="Workflow steps")
 
 
 class GimmeConfig(BaseModel):
@@ -99,7 +105,15 @@ class GimmeConfig(BaseModel):
             if not isinstance(data["endpoints"], Endpoints):
                 data["endpoints"] = Endpoints(**data["endpoints"])
 
-        return cls(**data)
+        config = cls(**data)
+
+        # Check for 'type' in workflow configuration and always set to 'dual'
+        if hasattr(config, 'workflow') and getattr(config.workflow, 'enabled', False):
+            # Use dict-like syntax with setattr to avoid AttributeError
+            setattr(config.workflow, 'type', 'dual')
+            logger.info("Set workflow type to 'dual'")
+
+        return config
 
     @classmethod
     def from_file(cls, file_path: str) -> "GimmeConfig":

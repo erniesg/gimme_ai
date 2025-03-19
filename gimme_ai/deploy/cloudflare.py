@@ -167,24 +167,102 @@ def deploy_to_cloudflare(config: GimmeConfig, deployment_files: Optional[Deploym
     # Check if workflow files exist, and ensure both are generated if workflow is enabled
     workflow_config = getattr(config, 'workflow', None)
     if workflow_config and getattr(workflow_config, 'enabled', False):
-        # Check if workflow_utils.js and workflow.js exist
-        workflow_utils_path = output_dir / 'workflow_utils.js'
-        workflow_path = output_dir / 'workflow.js'
+        # Ensure handlers directory exists
+        handlers_dir = output_dir / 'handlers'
+        os.makedirs(handlers_dir, exist_ok=True)
 
-        if not workflow_utils_path.exists() or not workflow_path.exists():
-            logger.info("Essential workflow files missing, generating them")
-            from ..deploy.templates import ensure_workflow_files
-            ensure_workflow_files(config, output_dir)
+        # List of required handler files
+        required_handlers = ['api_workflow.js', 'video_workflow.js']
 
-            # Update deployment_files with new paths
-            if workflow_path.exists() and workflow_utils_path.exists():
-                deployment_files = DeploymentResult(
-                    worker_script=deployment_files.worker_script,
-                    durable_objects_script=deployment_files.durable_objects_script,
-                    wrangler_config=deployment_files.wrangler_config,
-                    workflow_script=workflow_path,
-                    workflow_utils_script=workflow_utils_path
-                )
+        # Check for missing handlers
+        for handler in required_handlers:
+            handler_path = handlers_dir / handler
+            if not handler_path.exists():
+                logger.warning(f"⚠️ {handler} is missing from handlers directory!")
+
+                # Try to find it in templates directory
+                template_paths = [
+                    Path(__file__).parent.parent / "templates" / "handlers" / handler,
+                    Path(__file__).parent.parent.parent / "templates" / "handlers" / handler,
+                    Path.cwd() / "templates" / "handlers" / handler
+                ]
+
+                for template_path in template_paths:
+                    if template_path.exists():
+                        logger.info(f"✅ Found {handler} at {template_path}")
+                        # Copy the file
+                        shutil.copy2(template_path, handler_path)
+                        logger.info(f"✅ Successfully copied {handler} to handlers directory")
+                        break
+                else:
+                    logger.error(f"❌ Could not find {handler} anywhere!")
+
+    # Check if workflow.js exists - crucial for importing the workflow
+    workflow_js_path = output_dir / 'workflow.js'
+    if not workflow_js_path.exists():
+        logger.warning("⚠️ workflow.js is missing from deployment directory!")
+
+        # Generate workflow.js
+        from ..deploy.templates import generate_workflow_script
+        logger.info("Generating workflow.js...")
+        try:
+            generate_workflow_script(config, output_dir)
+            if workflow_js_path.exists():
+                logger.info("✅ Successfully generated workflow.js")
+            else:
+                # If generation failed, try copying from template
+                template_path = Path(__file__).parent.parent / "templates" / "workflow.js"
+                if template_path.exists():
+                    # Load template
+                    with open(template_path, "r") as f:
+                        content = f.read()
+
+                    # Replace placeholders with actual values
+                    content = content.replace("{{ project_name }}", config.project_name)
+                    content = content.replace("{{ workflow_class_name }}",
+                                            getattr(config.workflow, "class_name",
+                                                    f"{config.project_name.title().replace('-', '')}Workflow"))
+                    content = content.replace("{{ endpoints.dev }}", config.endpoints.dev)
+                    content = content.replace("{{ endpoints.prod }}", config.endpoints.prod)
+
+                    # Write to file
+                    with open(workflow_js_path, "w") as f:
+                        f.write(content)
+                    logger.info(f"✅ Copied and customized workflow.js template to {workflow_js_path}")
+                else:
+                    logger.error("❌ Could not find workflow.js template")
+        except Exception as e:
+            logger.error(f"❌ Error generating workflow.js: {e}")
+
+    # Check if workflow_utils.js exists
+    workflow_utils_path = output_dir / 'workflow_utils.js'
+    if not workflow_utils_path.exists():
+        logger.warning("⚠️ workflow_utils.js is missing from deployment directory!")
+
+        # Generate or copy workflow_utils.js
+        from ..deploy.templates import generate_workflow_utils_script
+        logger.info("Generating workflow_utils.js...")
+        try:
+            generate_workflow_utils_script(config, output_dir)
+            if not workflow_utils_path.exists():
+                # If generation failed, try copying from template
+                template_path = Path(__file__).parent.parent / "templates" / "workflow_utils.js"
+                if template_path.exists():
+                    # Load template
+                    with open(template_path, "r") as f:
+                        content = f.read()
+
+                    # Replace placeholders with actual values
+                    content = content.replace("{{ project_name }}", config.project_name)
+
+                    # Write to file
+                    with open(workflow_utils_path, "w") as f:
+                        f.write(content)
+                    logger.info(f"✅ Copied and customized workflow_utils.js template to {workflow_utils_path}")
+                else:
+                    logger.error("❌ Could not find workflow_utils.js template")
+        except Exception as e:
+            logger.error(f"❌ Error generating workflow_utils.js: {e}")
 
     # Change to the directory with the deployment files
     original_dir = os.getcwd()
@@ -226,7 +304,7 @@ def deploy_to_cloudflare(config: GimmeConfig, deployment_files: Optional[Deploym
         loaded_vars = {}
         try:
             from ..utils.environment import load_env_file
-            env_file = os.path.join(os.getcwd(), ".env")
+            env_file = os.path.join(original_dir, ".env")
             if os.path.exists(env_file):
                 logger.info(f"Loading environment variables from {env_file}")
                 loaded_vars = load_env_file(env_file)

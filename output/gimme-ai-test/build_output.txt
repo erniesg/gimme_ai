@@ -1,9 +1,9 @@
 STDOUT:
 
- ⛅️ wrangler 4.0.0 (update available 4.1.0)
+ ⛅️ wrangler 4.0.0 (update available 4.2.0)
 -------------------------------------------
 
-Total Upload: 25.94 KiB / gzip: 5.04 KiB
+Total Upload: 49.64 KiB / gzip: 8.73 KiB
 Your worker has access to the following bindings:
 - Durable Objects:
   - IP_LIMITER: IPRateLimiter

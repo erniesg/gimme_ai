@@ -381,16 +381,7 @@ def generate_workflow_utils_script(config: GimmeConfig, output_dir: Path) -> Opt
     return output_path
 
 def generate_workflow_script(config: GimmeConfig, output_dir: Optional[Path] = None) -> Optional[Path]:
-    """
-    Generate the workflow.js script based on configuration.
-
-    Args:
-        config: The application configuration
-        output_dir: Path to the output directory
-
-    Returns:
-        Path to the saved workflow script or None if workflow is not enabled
-    """
+    """Generate the workflow.js script based on configuration."""
     # Convert output_dir to Path if it's a string
     if isinstance(output_dir, str):
         output_dir = Path(output_dir)
@@ -417,21 +408,17 @@ def generate_workflow_script(config: GimmeConfig, output_dir: Optional[Path] = N
         print(f"Workflow template not found at {workflow_template_path}")
         return None
 
-    # Get workflow type
-    workflow_type = getattr(workflow_config, 'type', 'api')
+    # Get workflow type directly from config
+    workflow_type = getattr(workflow_config, 'type', 'dual')
+    print(f"Using workflow type from config: {workflow_type}")
 
     # Get workflow steps
     workflow_steps = getattr(workflow_config, 'steps', [])
 
-    # Derive consistent class name from project name (PascalCase + "Workflow")
+    # Generate workflow class name consistently
     project_parts = config.project_name.split('-')
-    derived_class_name = ''.join(part.title() for part in project_parts) + 'Workflow'
-
-    # Use the derived class name
-    workflow_class_name = derived_class_name
-
-    # Generate consistent workflow binding name (SCREAMING_SNAKE_CASE + "_WORKFLOW")
-    workflow_binding = config.project_name.upper().replace('-', '_') + '_WORKFLOW'
+    workflow_class_name = ''.join(part.title() for part in project_parts) + 'Workflow'
+    print(f"Using workflow class name: {workflow_class_name}")
 
     # Get endpoints from config
     dev_endpoint = config.endpoints.dev if hasattr(config, 'endpoints') and hasattr(config.endpoints, 'dev') else 'http://localhost:8000'
@@ -447,7 +434,7 @@ def generate_workflow_script(config: GimmeConfig, output_dir: Optional[Path] = N
         print(f"Error loading workflow template: {e}")
         template = Template(workflow_template_path.read_text())
 
-    # Render the template
+    # Render the template with the complete configuration context
     context = {
         "project_name": config.project_name,
         "workflow": {
@@ -456,7 +443,7 @@ def generate_workflow_script(config: GimmeConfig, output_dir: Optional[Path] = N
             "enabled": True
         },
         "workflow_class_name": workflow_class_name,
-        "workflow_binding": workflow_binding,
+        "workflow_binding": config.project_name.upper().replace('-', '_') + '_WORKFLOW',
         "endpoints": {
             "dev": dev_endpoint,
             "prod": prod_endpoint
@@ -474,45 +461,73 @@ def generate_workflow_script(config: GimmeConfig, output_dir: Optional[Path] = N
     workflow_js_path = output_dir / 'workflow.js'
     workflow_js_path.write_text(workflow_js)
 
-    # Create handlers directory if it doesn't exist
+    # Create and copy handler files based on workflow type
     handlers_dir = output_dir / 'handlers'
     handlers_dir.mkdir(exist_ok=True)
 
-    # Add these debug statements right at the start
-    print(f"DEBUG: Starting workflow script generation")
-    print(f"DEBUG: Output directory is {output_dir}")
-    print(f"DEBUG: Workflow type is {getattr(workflow_config, 'type', 'api')}")
+    # For API workflow or dual mode, include API handler
+    if workflow_type in ['api', 'dual']:
+        ensure_api_handler(TEMPLATES_DIR, handlers_dir)
+        print("✅ API workflow handler included")
 
-    # Then, when handling video workflow:
-    if workflow_type == 'video' or workflow_type == 'dual':
-        video_handler_template_path = TEMPLATES_DIR / 'handlers' / 'video_workflow.js'
-        print(f"DEBUG: Looking for video template at: {video_handler_template_path}")
-        print(f"DEBUG: Template exists: {video_handler_template_path.exists()}")
-
-        if video_handler_template_path.exists():
-            # Check the file is readable and not empty
-            try:
-                content = video_handler_template_path.read_text()
-                print(f"DEBUG: Template file size: {len(content)} bytes")
-                print(f"DEBUG: First 100 chars: {content[:100]}")
-            except Exception as e:
-                print(f"DEBUG: Error reading template: {e}")
-
-    if workflow_type == 'api' or workflow_type == 'dual':
-        api_handler_template_path = TEMPLATES_DIR / 'handlers' / 'api_workflow.js'
-        if api_handler_template_path.exists():
-            api_handler_js = api_handler_template_path.read_text()
-            api_handler_js_path = handlers_dir / 'api_workflow.js'
-            api_handler_js_path.write_text(api_handler_js)
-            print(f"Generated API workflow handler at {api_handler_js_path}")
-        else:
-            print(f"WARNING: API workflow template not found at {api_handler_template_path}")
+    # For video workflow or dual mode, include video handler
+    if workflow_type in ['video', 'dual']:
+        ensure_video_handler(TEMPLATES_DIR, handlers_dir, context)
+        print("✅ Video workflow handler included")
 
     # Also generate the workflow utils
     generate_workflow_utils_script(config, output_dir)
 
-    print(f"Generated workflow.js at {workflow_js_path}")
+    print(f"✅ Generated workflow.js at {workflow_js_path}")
     return workflow_js_path
+
+def ensure_api_handler(templates_dir, handlers_dir):
+    """Ensure API workflow handler exists"""
+    api_handler_template_path = templates_dir / 'handlers' / 'api_workflow.js'
+    if api_handler_template_path.exists():
+        api_handler_js = api_handler_template_path.read_text()
+        api_handler_js_path = handlers_dir / 'api_workflow.js'
+        api_handler_js_path.write_text(api_handler_js)
+        return True
+    else:
+        # Try backup locations
+        for path in [
+            Path(__file__).parent.parent.parent / "templates" / "handlers" / "api_workflow.js",
+            Path.cwd() / "templates" / "handlers" / "api_workflow.js"
+        ]:
+            if path.exists():
+                shutil.copy(path, handlers_dir / 'api_workflow.js')
+                return True
+    return False
+
+def ensure_video_handler(templates_dir, handlers_dir, context):
+    """Ensure video workflow handler exists with correct context"""
+    video_handler_template_path = templates_dir / 'handlers' / 'video_workflow.js'
+    if video_handler_template_path.exists():
+        # Load and render the template with context
+        video_handler_js = load_template(video_handler_template_path)
+        # Render with context to inject workflow steps
+        try:
+            # If template rendering fails, just copy the file
+            rendered = render_template(video_handler_js, context)
+            video_handler_js_path = handlers_dir / 'video_workflow.js'
+            with open(video_handler_js_path, 'w') as f:
+                f.write(rendered)
+            return True
+        except:
+            # Fallback to direct copy
+            shutil.copy(video_handler_template_path, handlers_dir / 'video_workflow.js')
+            return True
+    else:
+        # Try backup locations
+        for path in [
+            Path(__file__).parent.parent.parent / "templates" / "handlers" / "video_workflow.js",
+            Path.cwd() / "templates" / "handlers" / "video_workflow.js"
+        ]:
+            if path.exists():
+                shutil.copy(path, handlers_dir / 'video_workflow.js')
+                return True
+    return False
 
 def ensure_workflow_files(config, output_dir):
     """
@@ -556,3 +571,40 @@ def ensure_workflow_files(config, output_dir):
                     print(f"Error copying from {template_path}: {e}")
 
     return True
+
+def debug_video_handler_paths():
+    """Print debug information about available video handler paths."""
+    TEMPLATES_DIR = Path(__file__).parent.parent / "templates"
+
+    print("\n🔍 DEBUG: Checking video_workflow.js locations:")
+
+    potential_paths = [
+        TEMPLATES_DIR / "handlers" / "video_workflow.js",
+        Path(__file__).parent.parent.parent / "templates" / "handlers" / "video_workflow.js",
+        Path.cwd() / "templates" / "handlers" / "video_workflow.js",
+        # Add more potential paths here
+    ]
+
+    for i, path in enumerate(potential_paths):
+        exists = path.exists()
+        file_size = path.stat().st_size if exists else 0
+        print(f"  Path {i+1}: {path}")
+        print(f"  - Exists: {'✅' if exists else '❌'}")
+        if exists:
+            print(f"  - Size: {file_size} bytes")
+            # Print first few lines
+            try:
+                with open(path, 'r') as f:
+                    first_lines = "\n    ".join([line.strip() for line in f.readlines()[:5]])
+                print(f"  - First few lines:\n    {first_lines}")
+            except Exception as e:
+                print(f"  - Error reading file: {e}")
+        print()
+
+    print("🔍 DEBUG: Checking handlers directory:")
+    handlers_dir = TEMPLATES_DIR / "handlers"
+    if handlers_dir.exists():
+        print(f"  Handlers directory exists at: {handlers_dir}")
+        print(f"  Contents: {[f.name for f in handlers_dir.iterdir()]}")
+    else:
+        print(f"  Handlers directory doesn't exist at: {handlers_dir}")

@@ -35,7 +35,7 @@
   },
   "workflow": {
     "enabled": true,
-    "type": "dual",
+    "type": "video",
     "steps": [
       {
         "name": "init",

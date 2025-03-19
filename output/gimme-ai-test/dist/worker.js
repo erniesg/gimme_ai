@@ -189,6 +189,69 @@ var GlobalRateLimiter = class {
 // workflow.js
 import { WorkflowEntrypoint } from "cloudflare:workers";
 
+// workflow_utils.js
+function formatEndpoint(endpoint, state) {
+  return endpoint.replace(/\{([^}]+)\}/g, (match, key) => {
+    if (state[key] !== void 0) {
+      return state[key];
+    }
+    console.warn(`Missing value for ${key} in endpoint: ${endpoint}`);
+    return match;
+  });
+}
+__name(formatEndpoint, "formatEndpoint");
+function getDefaultHeaders() {
+  return {
+    "Content-Type": "application/json",
+    "Accept": "application/json"
+  };
+}
+__name(getDefaultHeaders, "getDefaultHeaders");
+function parseTimeString(timeStr) {
+  const match = timeStr.match(/^(\d+)([smh])$/);
+  if (!match) {
+    return 5e3;
+  }
+  const [_, value, unit] = match;
+  const numValue = parseInt(value, 10);
+  switch (unit) {
+    case "s":
+      return numValue * 1e3;
+    case "m":
+      return numValue * 60 * 1e3;
+    case "h":
+      return numValue * 60 * 60 * 1e3;
+    default:
+      return 5e3;
+  }
+}
+__name(parseTimeString, "parseTimeString");
+async function pollUntilComplete(step, endpoint, state, interval = "5s", maxAttempts = 60) {
+  const pollingName = `polling_${Date.now()}`;
+  return await step.loop(pollingName, {
+    maxAttempts
+  }, async (attempt) => {
+    const formattedEndpoint = formatEndpoint(endpoint, state);
+    const response = await fetch(formattedEndpoint, {
+      method: "GET",
+      headers: getDefaultHeaders()
+    });
+    if (!response.ok) {
+      throw new Error(`Polling failed (${response.status}): ${await response.text()}`);
+    }
+    const result = await response.json();
+    if (result.status === "completed" || result.status === "success") {
+      return { status: "completed", result };
+    } else if (result.status === "failed" || result.status === "error") {
+      throw new Error(`Job failed: ${JSON.stringify(result)}`);
+    }
+    const sleepTime = parseTimeString(interval);
+    await new Promise((resolve) => setTimeout(resolve, sleepTime));
+    return { status: "pending", attempt, result };
+  });
+}
+__name(pollUntilComplete, "pollUntilComplete");
+
 // handlers/api_workflow.js
 globalThis.apiWorkflowHandler = {
   /**
@@ -282,9 +345,568 @@ var api_workflow_default = {
   }, "fetch")
 };
 
+// handlers/video_workflow.js
+async function callBackendAPI(endpoint, options = {}, request) {
+  try {
+    if (!options.headers) {
+      options.headers = new Headers();
+    }
+    const headersToForward = [
+      "authorization",
+      "x-auth-source",
+      "x-auth-mode",
+      "x-project-name",
+      "modal-key",
+      "modal-secret",
+      "content-type"
+    ];
+    headersToForward.forEach((header) => {
+      const value = request.headers.get(header);
+      if (value) {
+        options.headers.set(header, value);
+      }
+    });
+    if (options.body && !options.headers.get("content-type")) {
+      options.headers.set("content-type", "application/json");
+    }
+    console.log(`Calling backend API: ${endpoint}`);
+    const response = await fetch(endpoint, options);
+    console.log(`API response status: ${response.status}`);
+    return response;
+  } catch (error) {
+    console.error(`API call error: ${error.message}`);
+    throw error;
+  }
+}
+__name(callBackendAPI, "callBackendAPI");
+async function handleGenerateVideo(request, env, workflowClass, apiBaseUrl) {
+  try {
+    console.log("Starting video generation process");
+    console.log(`API Base URL: ${apiBaseUrl}`);
+    console.log(`Workflow class: ${workflowClass}`);
+    console.log(`Available env bindings: ${Object.keys(env)}`);
+    const body = await request.json();
+    const { content, options = {} } = body;
+    if (!content) {
+      return new Response(JSON.stringify({
+        error: "Missing required content field"
+      }), {
+        status: 400,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+    const initResponse = await callBackendAPI(
+      `${apiBaseUrl}/workflow/init`,
+      {
+        method: "POST",
+        body: JSON.stringify({ content, options })
+      },
+      request
+    );
+    if (!initResponse.ok) {
+      const errorText = await initResponse.text();
+      console.error(`Failed to initialize workflow: ${errorText}`);
+      return new Response(JSON.stringify({
+        error: "Failed to initialize workflow",
+        details: errorText
+      }), {
+        status: initResponse.status,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+    const initData = await initResponse.json();
+    const jobId = initData.job_id;
+    console.log(`Workflow initialized with job_id: ${jobId}`);
+    let workflowInstance;
+    try {
+      if (env[workflowClass]) {
+        console.log(`Creating workflow instance with class: ${workflowClass}`);
+        workflowInstance = await env[workflowClass].create({
+          requestId: jobId,
+          job_id: jobId,
+          workflow_type: "video",
+          content,
+          options
+        });
+        console.log(`Workflow instance created: ${workflowInstance.id}`);
+      } else {
+        console.warn(`Workflow class ${workflowClass} not found in environment, using direct API mode`);
+      }
+    } catch (error) {
+      console.error(`Error creating workflow instance: ${error.message}`);
+    }
+    const generateScriptResponse = await callBackendAPI(
+      `${apiBaseUrl}/workflow/generate_script/${jobId}`,
+      { method: "POST" },
+      request
+    );
+    if (!generateScriptResponse.ok) {
+      const errorText = await generateScriptResponse.text();
+      console.error(`Failed to start script generation: ${errorText}`);
+      return new Response(JSON.stringify({
+        job_id: jobId,
+        workflow_id: workflowInstance ? workflowInstance.id : null,
+        status: "initialized",
+        warning: "Failed to start script generation automatically"
+      }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+    return new Response(JSON.stringify({
+      job_id: jobId,
+      workflow_id: workflowInstance ? workflowInstance.id : null,
+      status: "processing",
+      message: "Video generation workflow started"
+    }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" }
+    });
+  } catch (error) {
+    console.error(`Error in handleGenerateVideo: ${error.message}`);
+    return new Response(JSON.stringify({
+      error: "Failed to start video generation",
+      message: error.message
+    }), {
+      status: 500,
+      headers: { "Content-Type": "application/json" }
+    });
+  }
+}
+__name(handleGenerateVideo, "handleGenerateVideo");
+async function handleJobStatus(request, env, path, apiBaseUrl) {
+  try {
+    const pathParts = path.split("/");
+    const jobId = pathParts[pathParts.length - 1];
+    if (!jobId) {
+      return new Response(JSON.stringify({
+        error: "Missing job_id in request path"
+      }), {
+        status: 400,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+    console.log(`Checking status for job: ${jobId}`);
+    const statusResponse = await callBackendAPI(
+      `${apiBaseUrl}/workflow/status/${jobId}`,
+      { method: "GET" },
+      request
+    );
+    if (!statusResponse.ok) {
+      const errorText = await statusResponse.text();
+      console.error(`Failed to get job status: ${statusResponse.status} - ${errorText}`);
+      return new Response(JSON.stringify({
+        error: "Failed to get job status",
+        details: errorText
+      }), {
+        status: statusResponse.status,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+    const statusData = await statusResponse.json();
+    console.log(`Job status: ${JSON.stringify(statusData)}`);
+    if (statusData.status === "processing") {
+      await tryAdvanceWorkflow(jobId, statusData, apiBaseUrl, request);
+    }
+    return new Response(JSON.stringify(statusData), {
+      status: 200,
+      headers: { "Content-Type": "application/json" }
+    });
+  } catch (error) {
+    console.error(`Error in handleJobStatus: ${error.message}`);
+    return new Response(JSON.stringify({
+      error: "Failed to check job status",
+      message: error.message
+    }), {
+      status: 500,
+      headers: { "Content-Type": "application/json" }
+    });
+  }
+}
+__name(handleJobStatus, "handleJobStatus");
+async function handleGetVideo(request, env, path, apiBaseUrl) {
+  try {
+    const pathParts = path.split("/");
+    const jobId = pathParts[pathParts.length - 1];
+    if (!jobId) {
+      return new Response(JSON.stringify({
+        error: "Missing job_id in request path"
+      }), {
+        status: 400,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+    console.log(`Getting video for job: ${jobId}`);
+    const statusResponse = await callBackendAPI(
+      `${apiBaseUrl}/workflow/status/${jobId}`,
+      { method: "GET" },
+      request
+    );
+    if (!statusResponse.ok) {
+      return new Response(JSON.stringify({
+        error: "Failed to check job status",
+        details: await statusResponse.text()
+      }), {
+        status: statusResponse.status,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+    const statusData = await statusResponse.json();
+    if (statusData.status !== "completed") {
+      return new Response(JSON.stringify({
+        error: "Video not ready",
+        status: statusData.status,
+        steps: statusData.steps,
+        progress: statusData.progress
+      }), {
+        status: 400,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+    const videoFilename = statusData.final_video_details?.filename;
+    if (!videoFilename) {
+      return new Response(JSON.stringify({
+        error: "Video filename not found in status",
+        status: statusData
+      }), {
+        status: 404,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+    return new Response(JSON.stringify({
+      status: "completed",
+      video_url: `${apiBaseUrl}/videos/${videoFilename}`,
+      filename: videoFilename
+    }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" }
+    });
+  } catch (error) {
+    console.error(`Error in handleGetVideo: ${error.message}`);
+    return new Response(JSON.stringify({
+      error: "Failed to get video",
+      message: error.message
+    }), {
+      status: 500,
+      headers: { "Content-Type": "application/json" }
+    });
+  }
+}
+__name(handleGetVideo, "handleGetVideo");
+async function handleVideoFile(request, env, path, apiBaseUrl) {
+  try {
+    const pathParts = path.split("/");
+    const filename = pathParts[pathParts.length - 1];
+    if (!filename) {
+      return new Response(JSON.stringify({
+        error: "Missing filename in request path"
+      }), {
+        status: 400,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+    console.log(`Getting video file: ${filename}`);
+    const videoResponse = await callBackendAPI(
+      `${apiBaseUrl}/videos/${filename}`,
+      { method: "GET" },
+      request
+    );
+    if (!videoResponse.ok) {
+      return new Response(JSON.stringify({
+        error: "Failed to get video file",
+        details: await videoResponse.text()
+      }), {
+        status: videoResponse.status,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+    const headers = new Headers();
+    headers.set("Content-Type", "video/mp4");
+    headers.set("Content-Disposition", `attachment; filename="${filename}"`);
+    ["content-length", "last-modified", "etag"].forEach((header) => {
+      const value = videoResponse.headers.get(header);
+      if (value) {
+        headers.set(header, value);
+      }
+    });
+    return new Response(videoResponse.body, {
+      status: 200,
+      headers
+    });
+  } catch (error) {
+    console.error(`Error in handleVideoFile: ${error.message}`);
+    return new Response(JSON.stringify({
+      error: "Failed to get video file",
+      message: error.message
+    }), {
+      status: 500,
+      headers: { "Content-Type": "application/json" }
+    });
+  }
+}
+__name(handleVideoFile, "handleVideoFile");
+async function handleCleanup(request, env, path, apiBaseUrl) {
+  try {
+    const pathParts = path.split("/");
+    const jobId = pathParts[pathParts.length - 1];
+    if (!jobId) {
+      return new Response(JSON.stringify({
+        error: "Missing job_id in request path"
+      }), {
+        status: 400,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+    console.log(`Cleaning up resources for job: ${jobId}`);
+    const cleanupResponse = await callBackendAPI(
+      `${apiBaseUrl}/cleanup/${jobId}`,
+      { method: "DELETE" },
+      request
+    );
+    if (!cleanupResponse.ok) {
+      return new Response(JSON.stringify({
+        error: "Failed to cleanup resources",
+        details: await cleanupResponse.text()
+      }), {
+        status: cleanupResponse.status,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+    const cleanupData = await cleanupResponse.json();
+    return new Response(JSON.stringify(cleanupData), {
+      status: 200,
+      headers: { "Content-Type": "application/json" }
+    });
+  } catch (error) {
+    console.error(`Error in handleCleanup: ${error.message}`);
+    return new Response(JSON.stringify({
+      error: "Failed to cleanup resources",
+      message: error.message
+    }), {
+      status: 500,
+      headers: { "Content-Type": "application/json" }
+    });
+  }
+}
+__name(handleCleanup, "handleCleanup");
+async function tryAdvanceWorkflow(jobId, statusData, apiBaseUrl, request) {
+  try {
+    const steps = statusData.steps;
+    const workflowSteps = [
+      {
+        name: "init",
+        endpoint: `/workflow/init`,
+        dependencies: []
+      },
+      {
+        name: "generate_script",
+        endpoint: `/workflow/generate_script/${jobId}`,
+        dependencies: ["init"]
+      },
+      {
+        name: "generate_audio",
+        endpoint: `/workflow/generate_audio/${jobId}`,
+        dependencies: ["generate_script"]
+      },
+      {
+        name: "generate_base_video",
+        endpoint: `/workflow/generate_base_video/${jobId}`,
+        dependencies: ["generate_script"]
+      },
+      {
+        name: "generate_captions",
+        endpoint: `/workflow/generate_captions/${jobId}`,
+        dependencies: ["generate_audio"]
+      },
+      {
+        name: "combine_final_video",
+        endpoint: `/workflow/combine_final_video/${jobId}`,
+        dependencies: ["generate_base_video", "generate_audio", "generate_captions"]
+      }
+    ];
+    const stepStatus = {
+      "init": "completed",
+      // Init is always completed at this point
+      "generate_script": steps.script,
+      "generate_audio": steps.audio,
+      "generate_base_video": steps.base_video,
+      "generate_captions": steps.captions,
+      "combine_final_video": steps.final_video
+    };
+    for (const step of workflowSteps) {
+      if (stepStatus[step.name] === "completed" || stepStatus[step.name] === "processing") {
+        continue;
+      }
+      const allDependenciesMet = step.dependencies.every((dep) => stepStatus[dep] === "completed");
+      if (allDependenciesMet) {
+        console.log(`Starting step: ${step.name}`);
+        const response = await callBackendAPI(
+          `${apiBaseUrl}${step.endpoint}`,
+          { method: "POST" },
+          request
+        );
+        if (response.ok) {
+          console.log(`Successfully started step: ${step.name}`);
+        } else {
+          console.error(`Failed to start step ${step.name}: ${await response.text()}`);
+        }
+        break;
+      }
+    }
+  } catch (error) {
+    console.error(`Error in tryAdvanceWorkflow: ${error.message}`);
+  }
+}
+__name(tryAdvanceWorkflow, "tryAdvanceWorkflow");
+async function advanceWorkflow(jobId, apiBaseUrl, request) {
+  try {
+    const statusResponse = await callBackendAPI(
+      `${apiBaseUrl}/workflow/status/${jobId}`,
+      { method: "GET" },
+      request
+    );
+    if (!statusResponse.ok) {
+      return new Response(JSON.stringify({
+        error: "Failed to get workflow status",
+        details: await statusResponse.text()
+      }), {
+        status: statusResponse.status,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+    const statusData = await statusResponse.json();
+    await tryAdvanceWorkflow(jobId, statusData, apiBaseUrl, request);
+    const updatedStatusResponse = await callBackendAPI(
+      `${apiBaseUrl}/workflow/status/${jobId}`,
+      { method: "GET" },
+      request
+    );
+    if (!updatedStatusResponse.ok) {
+      return new Response(JSON.stringify({
+        error: "Failed to get updated workflow status",
+        details: await updatedStatusResponse.text()
+      }), {
+        status: updatedStatusResponse.status,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+    const updatedStatusData = await updatedStatusResponse.json();
+    return new Response(JSON.stringify({
+      message: "Workflow advancement attempted",
+      success: true,
+      status: updatedStatusData
+    }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" }
+    });
+  } catch (error) {
+    console.error(`Error in advanceWorkflow: ${error.message}`);
+    return new Response(JSON.stringify({
+      error: "Failed to advance workflow",
+      message: error.message
+    }), {
+      status: 500,
+      headers: { "Content-Type": "application/json" }
+    });
+  }
+}
+__name(advanceWorkflow, "advanceWorkflow");
+async function checkBackendHealth(apiBaseUrl) {
+  try {
+    console.log("Checking backend health at:", apiBaseUrl);
+    const endpoints = [
+      "/",
+      "/api",
+      "/api/video",
+      "/api/video/generate"
+    ];
+    const results = {};
+    for (const endpoint of endpoints) {
+      try {
+        const url = `${apiBaseUrl}${endpoint}`;
+        console.log(`Checking endpoint: ${url}`);
+        const response = await fetch(url, {
+          method: "GET",
+          headers: {
+            "Accept": "application/json"
+          }
+        });
+        results[endpoint] = {
+          status: response.status,
+          ok: response.ok
+        };
+        try {
+          const contentType = response.headers.get("Content-Type");
+          if (contentType) {
+            results[endpoint].contentType = contentType;
+          }
+        } catch (e) {
+        }
+      } catch (error) {
+        results[endpoint] = {
+          error: error.message
+        };
+      }
+    }
+    return results;
+  } catch (error) {
+    console.error("Error in health check:", error);
+    return { error: error.message };
+  }
+}
+__name(checkBackendHealth, "checkBackendHealth");
+var video_workflow_default = {
+  /**
+   * Handle video workflow requests
+   */
+  fetch: /* @__PURE__ */ __name(async (request, env) => {
+    const url = new URL(request.url);
+    const path = url.pathname;
+    const apiBaseUrl = env.MODAL_ENDPOINT || (url.hostname.includes("localhost") ? "http://localhost:8000" : "https://berlayar-ai--wanx-backend-app-function.modal.run");
+    const workflowClass = `${env.PROJECT_NAME || "GIMME_AI_TEST"}`.toUpperCase().replace(/-/g, "_") + "_WORKFLOW";
+    console.log(`Video workflow request to ${path}`);
+    console.log(`Using API Base URL: ${apiBaseUrl}`);
+    console.log(`Using workflow class: ${workflowClass}`);
+    if (path.startsWith("/generate_video_stream")) {
+      return handleGenerateVideo(request, env, workflowClass, apiBaseUrl);
+    } else if (path.startsWith("/job_status/")) {
+      return handleJobStatus(request, env, path, apiBaseUrl);
+    } else if (path.startsWith("/get_video/")) {
+      return handleGetVideo(request, env, path, apiBaseUrl);
+    } else if (path.startsWith("/videos/")) {
+      return handleVideoFile(request, env, path, apiBaseUrl);
+    } else if (path.startsWith("/cleanup/")) {
+      return handleCleanup(request, env, path, apiBaseUrl);
+    } else if (path.startsWith("/advance_workflow/")) {
+      const pathParts = path.split("/");
+      const jobId = pathParts[pathParts.length - 1];
+      return advanceWorkflow(jobId, apiBaseUrl, request);
+    } else if (path === "/debug") {
+      return new Response(JSON.stringify({
+        apiBaseUrl,
+        workflowClass,
+        availableBindings: Object.keys(env),
+        path,
+        healthCheck: await checkBackendHealth(apiBaseUrl)
+      }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+    return new Response(JSON.stringify({
+      error: "Unsupported video workflow endpoint",
+      path
+    }), {
+      status: 404,
+      headers: { "Content-Type": "application/json" }
+    });
+  }, "fetch")
+};
+
 // workflow.js
 var WORKFLOW_CONFIG = {
-  type: "api",
+  type: "dual",
+  // Always set to dual
   steps: [],
   defaults: {
     retry_limit: 3,
@@ -305,41 +927,111 @@ var GimmeAiTestWorkflow = class extends WorkflowEntrypoint {
    * Run the workflow
    */
   async run(event, step) {
-    console.log("==================== DEBUG START ====================");
-    console.log("WORKFLOW RUN STARTED");
-    console.log("Full payload:", JSON.stringify(event.payload));
-    console.log("Workflow config:", JSON.stringify(WORKFLOW_CONFIG));
     const state = {
       ...event.payload,
       requestId: event.payload.requestId || crypto.randomUUID(),
-      startTime: (/* @__PURE__ */ new Date()).toISOString()
+      job_id: event.payload.job_id || event.payload.requestId,
+      startTime: (/* @__PURE__ */ new Date()).toISOString(),
+      workflow_type: event.payload.workflow_type || "dual"
     };
-    console.log(`Starting workflow: ${state.requestId} (type: ${state.workflow_type || "unknown"})`);
-    console.log("Available environment variables:", Object.keys(this.env));
+    console.log(`Starting workflow: ${state.requestId}, job_id: ${state.job_id}, type: ${state.workflow_type}`);
+    const apiBaseUrl = this.env.MODAL_ENDPOINT || (this.env.ENV === "development" ? "http://localhost:8000" : "https://berlayar-ai--wanx-backend-app-function.modal.run");
+    console.log(`Using API base URL: ${apiBaseUrl}`);
     try {
-      console.log("Attempting to execute a test step...");
-      const testResult = await step.do(
-        "test_step",
-        { timeout: "30s" },
-        async () => {
-          console.log("Inside test step - sleeping for 5 seconds to test timing");
-          await new Promise((resolve) => setTimeout(resolve, 5e3));
-          console.log("Test step completed");
-          return { status: "test_completed" };
+      const results = {};
+      results.init = await step.do("init_step", { timeout: "30s" }, async () => {
+        if (state.workflow_type === "video") {
+          const initEndpoint = `${apiBaseUrl}/workflow/init`;
+          const response = await fetch(initEndpoint, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "X-Auth-Source": "gimme-ai-gateway",
+              "X-Auth-Mode": "admin"
+            },
+            body: JSON.stringify({
+              content: state.content,
+              options: state.options || {}
+            })
+          });
+          if (!response.ok) {
+            throw new Error(`Failed to initialize workflow: ${await response.text()}`);
+          }
+          const data = await response.json();
+          return {
+            job_id: data.job_id,
+            status: "completed"
+          };
+        } else {
+          return {
+            job_id: state.requestId,
+            status: "completed"
+          };
         }
-      );
-      console.log("Test step result:", JSON.stringify(testResult));
+      });
+      if (results.init && results.init.job_id) {
+        state.job_id = results.init.job_id;
+      }
+      const workflowSteps = [{ "endpoint": "/workflow/init", "method": "POST", "name": "init" }, { "depends_on": ["init"], "endpoint": "/workflow/generate_script/{job_id}", "method": "POST", "name": "generate_script", "poll": { "endpoint": "/workflow/status/{job_id}", "interval": "5s", "max_attempts": 60 } }, { "depends_on": ["generate_script"], "endpoint": "/workflow/generate_audio/{job_id}", "method": "POST", "name": "generate_audio", "poll": { "endpoint": "/workflow/status/{job_id}", "interval": "5s", "max_attempts": 60 } }, { "depends_on": ["generate_script"], "endpoint": "/workflow/generate_base_video/{job_id}", "method": "POST", "name": "generate_base_video", "poll": { "endpoint": "/workflow/status/{job_id}", "interval": "5s", "max_attempts": 60 } }, { "depends_on": ["generate_audio"], "endpoint": "/workflow/generate_captions/{job_id}", "method": "POST", "name": "generate_captions", "poll": { "endpoint": "/workflow/status/{job_id}", "interval": "5s", "max_attempts": 60 } }, { "depends_on": ["generate_base_video", "generate_audio", "generate_captions"], "endpoint": "/workflow/combine_final_video/{job_id}", "method": "POST", "name": "combine_final_video", "poll": { "endpoint": "/workflow/status/{job_id}", "interval": "5s", "max_attempts": 60 } }];
+      const stepsToRun = workflowSteps.filter((step2) => step2.name !== "init");
+      for (const configStep of stepsToRun) {
+        const endpoint = configStep.endpoint.replace(/{job_id}/g, state.job_id);
+        const dependencies = configStep.depends_on || [];
+        const dependenciesMet = dependencies.every((dep) => results[dep] && results[dep].status === "completed");
+        if (dependenciesMet) {
+          console.log(`Executing step: ${configStep.name}`);
+          results[configStep.name] = await step.do(
+            configStep.name,
+            { timeout: "10m" },
+            // 10 minute timeout for each step
+            async () => {
+              const stepEndpoint = `${apiBaseUrl}${endpoint}`;
+              const response = await fetch(stepEndpoint, {
+                method: configStep.method || "POST",
+                headers: {
+                  "Content-Type": "application/json",
+                  "X-Auth-Source": "gimme-ai-gateway",
+                  "X-Auth-Mode": "admin"
+                }
+              });
+              if (!response.ok) {
+                throw new Error(`Failed to execute step ${configStep.name}: ${await response.text()}`);
+              }
+              if (configStep.poll) {
+                const pollEndpoint = configStep.poll.endpoint.replace(/{job_id}/g, state.job_id);
+                const interval = configStep.poll.interval || "5s";
+                const maxAttempts = configStep.poll.max_attempts || 60;
+                return await pollUntilComplete(
+                  step,
+                  `${apiBaseUrl}${pollEndpoint}`,
+                  state,
+                  interval,
+                  maxAttempts
+                );
+              }
+              return { status: "completed" };
+            }
+          );
+        }
+      }
+      return {
+        job_id: state.job_id,
+        workflow_type: state.workflow_type,
+        status: "completed",
+        steps: Object.keys(results).map((key) => ({
+          name: key,
+          status: results[key]?.status || "unknown"
+        }))
+      };
     } catch (error) {
-      console.error("Error in test step:", error);
+      console.error(`Workflow error: ${error.message}`);
+      return {
+        job_id: state.job_id,
+        workflow_type: state.workflow_type,
+        status: "failed",
+        error: error.message
+      };
     }
-    console.log("==================== DEBUG END ====================");
-    return {
-      status: "debug_completed",
-      workflow_type: state.workflow_type,
-      requestId: state.requestId,
-      config_steps: WORKFLOW_CONFIG.steps ? WORKFLOW_CONFIG.steps.map((s) => s.name) : [],
-      debug_time: (/* @__PURE__ */ new Date()).toISOString()
-    };
   }
   /**
    * Get request body for a step
@@ -350,16 +1042,19 @@ var GimmeAiTestWorkflow = class extends WorkflowEntrypoint {
       if (isVideoWorkflow) {
         return {
           content: state.content,
-          options: state.options || {}
+          options: state.options || {},
+          apiPrefix: state.apiPrefix || "/api/video"
         };
       }
       return {
-        ...state
+        ...state,
+        apiPrefix: state.apiPrefix || "/api/video"
       };
     }
     return {
       requestId: state.requestId,
-      job_id: state.job_id || state.instanceId
+      job_id: state.job_id || state.instanceId,
+      apiPrefix: state.apiPrefix || "/api/video"
     };
   }
 };
@@ -373,11 +1068,12 @@ var workflowHandler = {
       return api_workflow_default.fetch(request, env);
     }
     if (path.startsWith("/generate_video_stream") || path.startsWith("/job_status/") || path.startsWith("/get_video/") || path.startsWith("/videos/") || path.startsWith("/cleanup/")) {
-      return videoWorkflowHandler.fetch(request, env);
+      return video_workflow_default.fetch(request, env);
     }
     return new Response(JSON.stringify({
       error: "Workflow endpoint not found",
-      path
+      path,
+      type: "dual"
     }), {
       status: 404,
       headers: { "Content-Type": "application/json" }

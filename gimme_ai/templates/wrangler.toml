@@ -1,7 +1,7 @@
 # gimme_ai/templates/wrangler.toml
 name = "{{ project_name }}"
 main = "worker.js"
-compatibility_date = "2023-05-15"
+compatibility_date = "2024-10-22"
 
 # Durable Objects bindings
 [[durable_objects.bindings]]

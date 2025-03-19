@@ -2,14 +2,16 @@
 import { WorkflowEntrypoint } from 'cloudflare:workers';
 import * as WorkflowUtils from './workflow_utils.js';
 
-// Import specialized handlers
+// Import handlers based on workflow type
 
+// Import both handlers for dual mode
 import apiWorkflowHandler from './handlers/api_workflow.js';
+import videoWorkflowHandler from './handlers/video_workflow.js';
 
 
 // Workflow configuration - this will be replaced with actual config during deployment
 const WORKFLOW_CONFIG = {
-  type: "api",
+  type: "dual", // Always set to dual
   steps: [],
   defaults: {
     retry_limit: 3,
@@ -25,56 +27,154 @@ const WORKFLOW_CONFIG = {
 
 /**
  * GimmeAiTestWorkflow - A workflow for gimme-ai-test
+ * Type: dual
  */
 export class GimmeAiTestWorkflow extends WorkflowEntrypoint {
   /**
    * Run the workflow
    */
   async run(event, step) {
-    // Extensive logging to understand what's happening
-    console.log("==================== DEBUG START ====================");
-    console.log("WORKFLOW RUN STARTED");
-    console.log("Full payload:", JSON.stringify(event.payload));
-    console.log("Workflow config:", JSON.stringify(WORKFLOW_CONFIG));
-
     // Initialize state with whatever came in the request
     const state = {
       ...event.payload,
       requestId: event.payload.requestId || crypto.randomUUID(),
-      startTime: new Date().toISOString()
+      job_id: event.payload.job_id || event.payload.requestId,
+      startTime: new Date().toISOString(),
+      workflow_type: event.payload.workflow_type || 'dual'
     };
 
-    console.log(`Starting workflow: ${state.requestId} (type: ${state.workflow_type || 'unknown'})`);
-    console.log("Available environment variables:", Object.keys(this.env));
+    console.log(`Starting workflow: ${state.requestId}, job_id: ${state.job_id}, type: ${state.workflow_type}`);
 
-    // Execute one explicit step for testing
+    // Get API base URL from environment
+    const apiBaseUrl = this.env.MODAL_ENDPOINT ||
+      (this.env.ENV === 'development' ? "http://localhost:8000" : "https://berlayar-ai--wanx-backend-app-function.modal.run");
+
+    console.log(`Using API base URL: ${apiBaseUrl}`);
+
+    // Execute workflow steps based on config
     try {
-      console.log("Attempting to execute a test step...");
-      const testResult = await step.do(
-        'test_step',
-        { timeout: "30s" },
-        async () => {
-          console.log("Inside test step - sleeping for 5 seconds to test timing");
-          await new Promise(resolve => setTimeout(resolve, 5000));
-          console.log("Test step completed");
-          return { status: "test_completed" };
+      // Track step results
+      const results = {};
+
+      // Initialize workflow with backend
+      results.init = await step.do('init_step', { timeout: "30s" }, async () => {
+        if (state.workflow_type === 'video') {
+          // For video workflow, initialize with content
+          const initEndpoint = `${apiBaseUrl}/workflow/init`;
+          const response = await fetch(initEndpoint, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'X-Auth-Source': 'gimme-ai-gateway',
+              'X-Auth-Mode': 'admin'
+            },
+            body: JSON.stringify({
+              content: state.content,
+              options: state.options || {}
+            })
+          });
+
+          if (!response.ok) {
+            throw new Error(`Failed to initialize workflow: ${await response.text()}`);
+          }
+
+          const data = await response.json();
+          return {
+            job_id: data.job_id,
+            status: 'completed'
+          };
+        } else {
+          // For API workflow, just return the request ID
+          return {
+            job_id: state.requestId,
+            status: 'completed'
+          };
         }
-      );
-      console.log("Test step result:", JSON.stringify(testResult));
+      });
+
+      // Update state with job_id from initialization
+      if (results.init && results.init.job_id) {
+        state.job_id = results.init.job_id;
+      }
+
+      // Define workflow steps from config
+      const workflowSteps = [{"endpoint": "/workflow/init", "method": "POST", "name": "init"}, {"depends_on": ["init"], "endpoint": "/workflow/generate_script/{job_id}", "method": "POST", "name": "generate_script", "poll": {"endpoint": "/workflow/status/{job_id}", "interval": "5s", "max_attempts": 60}}, {"depends_on": ["generate_script"], "endpoint": "/workflow/generate_audio/{job_id}", "method": "POST", "name": "generate_audio", "poll": {"endpoint": "/workflow/status/{job_id}", "interval": "5s", "max_attempts": 60}}, {"depends_on": ["generate_script"], "endpoint": "/workflow/generate_base_video/{job_id}", "method": "POST", "name": "generate_base_video", "poll": {"endpoint": "/workflow/status/{job_id}", "interval": "5s", "max_attempts": 60}}, {"depends_on": ["generate_audio"], "endpoint": "/workflow/generate_captions/{job_id}", "method": "POST", "name": "generate_captions", "poll": {"endpoint": "/workflow/status/{job_id}", "interval": "5s", "max_attempts": 60}}, {"depends_on": ["generate_base_video", "generate_audio", "generate_captions"], "endpoint": "/workflow/combine_final_video/{job_id}", "method": "POST", "name": "combine_final_video", "poll": {"endpoint": "/workflow/status/{job_id}", "interval": "5s", "max_attempts": 60}}];
+
+      // Skip the init step since we've already done it
+      const stepsToRun = workflowSteps.filter(step => step.name !== 'init');
+
+      // Process each step in order
+      for (const configStep of stepsToRun) {
+        // Format the endpoint by replacing {job_id} with the actual job_id
+        const endpoint = configStep.endpoint.replace(/{job_id}/g, state.job_id);
+
+        // Check if dependencies are met
+        const dependencies = configStep.depends_on || [];
+        const dependenciesMet = dependencies.every(dep =>
+          results[dep] && results[dep].status === 'completed');
+
+        if (dependenciesMet) {
+          console.log(`Executing step: ${configStep.name}`);
+
+          // Call the step endpoint
+          results[configStep.name] = await step.do(
+            configStep.name,
+            { timeout: "10m" }, // 10 minute timeout for each step
+            async () => {
+              const stepEndpoint = `${apiBaseUrl}${endpoint}`;
+              const response = await fetch(stepEndpoint, {
+                method: configStep.method || 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'X-Auth-Source': 'gimme-ai-gateway',
+                  'X-Auth-Mode': 'admin'
+                }
+              });
+
+              if (!response.ok) {
+                throw new Error(`Failed to execute step ${configStep.name}: ${await response.text()}`);
+              }
+
+              // If polling is configured for this step, use it
+              if (configStep.poll) {
+                const pollEndpoint = configStep.poll.endpoint.replace(/{job_id}/g, state.job_id);
+                const interval = configStep.poll.interval || "5s";
+                const maxAttempts = configStep.poll.max_attempts || 60;
+
+                return await WorkflowUtils.pollUntilComplete(
+                  step,
+                  `${apiBaseUrl}${pollEndpoint}`,
+                  state,
+                  interval,
+                  maxAttempts
+                );
+              }
+
+              return { status: 'completed' };
+            }
+          );
+        }
+      }
+
+      // Return final result
+      return {
+        job_id: state.job_id,
+        workflow_type: state.workflow_type,
+        status: "completed",
+        steps: Object.keys(results).map(key => ({
+          name: key,
+          status: results[key]?.status || 'unknown'
+        }))
+      };
     } catch (error) {
-      console.error("Error in test step:", error);
+      console.error(`Workflow error: ${error.message}`);
+      return {
+        job_id: state.job_id,
+        workflow_type: state.workflow_type,
+        status: "failed",
+        error: error.message
+      };
     }
-
-    // Skip actual implementation for now, just return debug info
-    console.log("==================== DEBUG END ====================");
-
-    return {
-      status: "debug_completed",
-      workflow_type: state.workflow_type,
-      requestId: state.requestId,
-      config_steps: WORKFLOW_CONFIG.steps ? WORKFLOW_CONFIG.steps.map(s => s.name) : [],
-      debug_time: new Date().toISOString()
-    };
   }
 
   /**
@@ -91,19 +191,22 @@ export class GimmeAiTestWorkflow extends WorkflowEntrypoint {
       if (isVideoWorkflow) {
         return {
           content: state.content,
-          options: state.options || {}
+          options: state.options || {},
+          apiPrefix: state.apiPrefix || '/api/video'
         };
       }
       // For API workflow, pass through all parameters
       return {
-        ...state
+        ...state,
+        apiPrefix: state.apiPrefix || '/api/video'
       };
     }
 
     // For subsequent steps, include minimal information
     return {
       requestId: state.requestId,
-      job_id: state.job_id || state.instanceId
+      job_id: state.job_id || state.instanceId,
+      apiPrefix: state.apiPrefix || '/api/video'
     };
   }
 }
@@ -123,8 +226,10 @@ export const workflowHandler = {
 
     // Handle workflow API route
     if (path.startsWith('/workflow')) {
+      
       // Handle via API workflow handler
       return apiWorkflowHandler.fetch(request, env);
+      
     }
 
     // Handle video workflow routes
@@ -133,13 +238,17 @@ export const workflowHandler = {
         path.startsWith('/get_video/') ||
         path.startsWith('/videos/') ||
         path.startsWith('/cleanup/')) {
+      
+      // Use video workflow handler
       return videoWorkflowHandler.fetch(request, env);
+      
     }
 
     // No handler matched
     return new Response(JSON.stringify({
       error: "Workflow endpoint not found",
-      path: path
+      path: path,
+      type: "dual"
     }), {
       status: 404,
       headers: { "Content-Type": "application/json" }

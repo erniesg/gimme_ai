@@ -294,7 +294,7 @@ def test_all_command(
         reset_rate_limits(endpoint, admin_pw, skip_reset_confirm)
 
 @click.command(name="test-workflow-type")
-@click.argument("workflow_type", type=click.Choice(["api", "video"]))
+@click.argument("workflow_type", type=click.Choice(["api", "video", "dual"]))
 @click.argument("url", required=False)
 @click.option("--verbose", "-v", is_flag=True, help="Show detailed output")
 @click.option("--admin-password", help="Admin password for authentication")
@@ -306,11 +306,35 @@ def test_workflow_type_command(
     admin_password: Optional[str] = None,
     env_file: str = ".env",
 ):
-    """Test a specific workflow type (api or video) with a simple payload."""
-    # Get admin password from env file if not provided
+    """Test a specific workflow type."""
     admin_pw = get_admin_password(admin_password, env_file)
+    endpoint = get_endpoint_url(url, ".gimme-config.json")
 
-    test_workflow_type(workflow_type, url, verbose, admin_pw)
+    click.echo(f"🧪 Testing {workflow_type} workflow at {endpoint}")
+
+    # If dual mode, test both API and video workflows in sequence
+    if workflow_type == "dual":
+        click.echo("\n📋 TESTING API WORKFLOW =====================================")
+        api_success = test_workflow_type("api", endpoint, verbose, admin_pw)
+
+        click.echo("\n📋 TESTING VIDEO WORKFLOW ==================================")
+        video_success = test_workflow_type("video", endpoint, verbose, admin_pw)
+
+        if api_success and video_success:
+            click.echo("\n✅ Both workflow types tested successfully!")
+            return True
+        elif api_success:
+            click.echo("\n⚠️ API workflow succeeded but video workflow failed.")
+            return False
+        elif video_success:
+            click.echo("\n⚠️ Video workflow succeeded but API workflow failed.")
+            return False
+        else:
+            click.echo("\n❌ Both workflow types failed.")
+            return False
+
+    # Otherwise test the specific workflow type
+    return test_workflow_type(workflow_type, endpoint, verbose, admin_pw)
 
 # ========== Helper Functions ==========
 
