@@ -1,5 +1,6 @@
 // Workflow template for gimme-ai-test
 import { WorkflowEntrypoint } from 'cloudflare:workers';
+import { NonRetryableError } from 'cloudflare:workflows';
 import * as WorkflowUtils from './workflow_utils.js';
 
 // Import handlers based on workflow type
@@ -9,21 +10,11 @@ import apiWorkflowHandler from './handlers/api_workflow.js';
 import videoWorkflowHandler from './handlers/video_workflow.js';
 
 
-// Workflow configuration - this will be replaced with actual config during deployment
-const WORKFLOW_CONFIG = {
-  type: "dual", // Always set to dual
-  steps: [],
-  defaults: {
-    retry_limit: 3,
-    timeout: "5m",
-    polling_interval: "5s",
-    method: "POST"
-  },
-  endpoints: {
-    dev: "http://localhost:8000",
-    prod: "https://berlayar-ai--wanx-backend-app-function.modal.run"
-  }
-};
+// Get API base URL from config
+const apiBaseUrl = 'https://berlayar-ai--wanx-backend-app-function.modal.run';  // This will be replaced during template rendering
+
+// Get steps from config
+const workflowSteps = [{"config": {"retries": 3, "timeout": "30 seconds"}, "endpoint": "/workflow/init", "method": "POST", "name": "init"}, {"config": {"retries": {"backoff": "exponential", "delay": "5s", "limit": 3}, "timeout": "2m"}, "depends_on": ["init"], "endpoint": "/workflow/generate_script/{job_id}", "method": "POST", "name": "generate_script", "poll": {"endpoint": "/workflow/status/{job_id}", "interval": "5s", "max_attempts": 60}}, {"config": {"retries": {"backoff": "exponential", "delay": "5s", "limit": 3}, "timeout": "5m"}, "depends_on": ["generate_script"], "endpoint": "/workflow/generate_audio/{job_id}", "method": "POST", "name": "generate_audio", "poll": {"endpoint": "/workflow/status/{job_id}", "interval": "5s", "max_attempts": 60}}, {"config": {"retries": {"backoff": "exponential", "delay": "5s", "limit": 3}, "timeout": "5m"}, "depends_on": ["generate_script"], "endpoint": "/workflow/generate_base_video/{job_id}", "method": "POST", "name": "generate_base_video", "poll": {"endpoint": "/workflow/status/{job_id}", "interval": "5s", "max_attempts": 60}}, {"config": {"retries": {"backoff": "exponential", "delay": "5s", "limit": 3}, "timeout": "2m"}, "depends_on": ["generate_audio"], "endpoint": "/workflow/generate_captions/{job_id}", "method": "POST", "name": "generate_captions", "poll": {"endpoint": "/workflow/status/{job_id}", "interval": "5s", "max_attempts": 60}}, {"config": {"retries": {"backoff": "exponential", "delay": "5s", "limit": 3}, "timeout": "5m"}, "depends_on": ["generate_base_video", "generate_audio", "generate_captions"], "endpoint": "/workflow/combine_final_video/{job_id}", "method": "POST", "name": "combine_final_video", "poll": {"endpoint": "/workflow/status/{job_id}", "interval": "5s", "max_attempts": 60}}];  // This will be replaced during template rendering
 
 /**
  * GimmeAiTestWorkflow - A workflow for gimme-ai-test
@@ -34,147 +25,135 @@ export class GimmeAiTestWorkflow extends WorkflowEntrypoint {
    * Run the workflow
    */
   async run(event, step) {
-    // Initialize state with whatever came in the request
-    const state = {
-      ...event.payload,
-      requestId: event.payload.requestId || crypto.randomUUID(),
-      job_id: event.payload.job_id || event.payload.requestId,
-      startTime: new Date().toISOString(),
-      workflow_type: event.payload.workflow_type || 'dual'
-    };
+    console.log('Event received:', JSON.stringify(event));
 
-    console.log(`Starting workflow: ${state.requestId}, job_id: ${state.job_id}, type: ${state.workflow_type}`);
+    // Initialize workflow first to get the job_id
+    const initResult = await step.do("init_step", async () => {
+      const response = await fetch(`${apiBaseUrl}/workflow/init`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Auth-Source': 'gimme-ai-gateway',
+          'X-Auth-Mode': 'admin'
+        },
+        body: JSON.stringify({
+          // Since we don't have content in the event, we'll use a default or fetch from state
+          content: "Debug Modal connection",
+          options: {}
+        })
+      });
 
-    // Get API base URL from environment
-    const apiBaseUrl = this.env.MODAL_ENDPOINT ||
-      (this.env.ENV === 'development' ? "http://localhost:8000" : "https://berlayar-ai--wanx-backend-app-function.modal.run");
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('Init step failed:', errorText);
+        throw new NonRetryableError(`Failed to initialize workflow: ${errorText}`);
+      }
 
-    console.log(`Using API base URL: ${apiBaseUrl}`);
+      const result = await response.json();
+      console.log('Init step result:', result);
+      return result;
+    });
 
-    // Execute workflow steps based on config
-    try {
-      // Track step results
-      const results = {};
+    // Store the job_id for subsequent steps
+    const jobId = initResult.job_id;
+    console.log('Using job_id:', jobId);
 
-      // Initialize workflow with backend
-      results.init = await step.do('init_step', { timeout: "30s" }, async () => {
-        if (state.workflow_type === 'video') {
-          // For video workflow, initialize with content
-          const initEndpoint = `${apiBaseUrl}/workflow/init`;
-          const response = await fetch(initEndpoint, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'X-Auth-Source': 'gimme-ai-gateway',
-              'X-Auth-Mode': 'admin'
-            },
-            body: JSON.stringify({
-              content: state.content,
-              options: state.options || {}
-            })
-          });
-
-          if (!response.ok) {
-            throw new Error(`Failed to initialize workflow: ${await response.text()}`);
-          }
-
-          const data = await response.json();
-          return {
-            job_id: data.job_id,
-            status: 'completed'
-          };
-        } else {
-          // For API workflow, just return the request ID
-          return {
-            job_id: state.requestId,
-            status: 'completed'
-          };
+    // Generate script
+    await step.do("generate_script", async () => {
+      const response = await fetch(`${apiBaseUrl}/workflow/generate_script/${jobId}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Auth-Source': 'gimme-ai-gateway',
+          'X-Auth-Mode': 'admin'
         }
       });
 
-      // Update state with job_id from initialization
-      if (results.init && results.init.job_id) {
-        state.job_id = results.init.job_id;
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('Generate script step failed:', errorText);
+        throw new NonRetryableError(`Failed to generate script: ${errorText}`);
       }
 
-      // Define workflow steps from config
-      const workflowSteps = [{"endpoint": "/workflow/init", "method": "POST", "name": "init"}, {"depends_on": ["init"], "endpoint": "/workflow/generate_script/{job_id}", "method": "POST", "name": "generate_script", "poll": {"endpoint": "/workflow/status/{job_id}", "interval": "5s", "max_attempts": 60}}, {"depends_on": ["generate_script"], "endpoint": "/workflow/generate_audio/{job_id}", "method": "POST", "name": "generate_audio", "poll": {"endpoint": "/workflow/status/{job_id}", "interval": "5s", "max_attempts": 60}}, {"depends_on": ["generate_script"], "endpoint": "/workflow/generate_base_video/{job_id}", "method": "POST", "name": "generate_base_video", "poll": {"endpoint": "/workflow/status/{job_id}", "interval": "5s", "max_attempts": 60}}, {"depends_on": ["generate_audio"], "endpoint": "/workflow/generate_captions/{job_id}", "method": "POST", "name": "generate_captions", "poll": {"endpoint": "/workflow/status/{job_id}", "interval": "5s", "max_attempts": 60}}, {"depends_on": ["generate_base_video", "generate_audio", "generate_captions"], "endpoint": "/workflow/combine_final_video/{job_id}", "method": "POST", "name": "combine_final_video", "poll": {"endpoint": "/workflow/status/{job_id}", "interval": "5s", "max_attempts": 60}}];
+      const result = await response.json();
+      console.log('Generate script result:', result);
+      return result;
+    });
 
-      // Skip the init step since we've already done it
-      const stepsToRun = workflowSteps.filter(step => step.name !== 'init');
+    // Poll until script generation is complete
+    await step.do("poll_script_generation", async () => {
+      let attempts = 0;
+      const maxAttempts = 60;
 
-      // Process each step in order
-      for (const configStep of stepsToRun) {
-        // Format the endpoint by replacing {job_id} with the actual job_id
-        const endpoint = configStep.endpoint.replace(/{job_id}/g, state.job_id);
+      while (attempts < maxAttempts) {
+        const response = await fetch(`${apiBaseUrl}/workflow/status/${jobId}?step=script`, {
+          headers: {
+            'X-Auth-Source': 'gimme-ai-gateway',
+            'X-Auth-Mode': 'admin'
+          }
+        });
 
-        // Check if dependencies are met
-        const dependencies = configStep.depends_on || [];
-        const dependenciesMet = dependencies.every(dep =>
-          results[dep] && results[dep].status === 'completed');
-
-        if (dependenciesMet) {
-          console.log(`Executing step: ${configStep.name}`);
-
-          // Call the step endpoint
-          results[configStep.name] = await step.do(
-            configStep.name,
-            { timeout: "10m" }, // 10 minute timeout for each step
-            async () => {
-              const stepEndpoint = `${apiBaseUrl}${endpoint}`;
-              const response = await fetch(stepEndpoint, {
-                method: configStep.method || 'POST',
-                headers: {
-                  'Content-Type': 'application/json',
-                  'X-Auth-Source': 'gimme-ai-gateway',
-                  'X-Auth-Mode': 'admin'
-                }
-              });
-
-              if (!response.ok) {
-                throw new Error(`Failed to execute step ${configStep.name}: ${await response.text()}`);
-              }
-
-              // If polling is configured for this step, use it
-              if (configStep.poll) {
-                const pollEndpoint = configStep.poll.endpoint.replace(/{job_id}/g, state.job_id);
-                const interval = configStep.poll.interval || "5s";
-                const maxAttempts = configStep.poll.max_attempts || 60;
-
-                return await WorkflowUtils.pollUntilComplete(
-                  step,
-                  `${apiBaseUrl}${pollEndpoint}`,
-                  state,
-                  interval,
-                  maxAttempts
-                );
-              }
-
-              return { status: 'completed' };
-            }
-          );
+        if (!response.ok) {
+          console.error('Script status check failed:', await response.text());
+          await step.sleep("retry_delay", "5 seconds");
+          attempts++;
+          continue;
         }
+
+        const status = await response.json();
+        console.log('Script status:', status);
+
+        if (status.status === "completed") {
+          return status;
+        } else if (status.status === "failed") {
+          throw new NonRetryableError(`Script generation failed: ${status.error || 'Unknown error'}`);
+        }
+
+        await step.sleep("polling_delay", "5 seconds");
+        attempts++;
       }
 
-      // Return final result
-      return {
-        job_id: state.job_id,
-        workflow_type: state.workflow_type,
-        status: "completed",
-        steps: Object.keys(results).map(key => ({
-          name: key,
-          status: results[key]?.status || 'unknown'
-        }))
-      };
-    } catch (error) {
-      console.error(`Workflow error: ${error.message}`);
-      return {
-        job_id: state.job_id,
-        workflow_type: state.workflow_type,
-        status: "failed",
-        error: error.message
-      };
-    }
+      throw new NonRetryableError("Timeout waiting for script generation");
+    });
+
+    // After script is ready, trigger audio and base video in parallel
+    await Promise.all([
+      step.do("generate_audio", async () => {
+        const response = await fetch(`${apiBaseUrl}/workflow/generate_audio/${jobId}`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Auth-Source': 'gimme-ai-gateway',
+            'X-Auth-Mode': 'admin'
+          }
+        });
+
+        if (!response.ok) {
+          throw new NonRetryableError(`Failed to start audio generation: ${await response.text()}`);
+        }
+
+        return await response.json();
+      }),
+      step.do("generate_base_video", async () => {
+        const response = await fetch(`${apiBaseUrl}/workflow/generate_base_video/${jobId}`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Auth-Source': 'gimme-ai-gateway',
+            'X-Auth-Mode': 'admin'
+          }
+        });
+
+        if (!response.ok) {
+          throw new NonRetryableError(`Failed to start base video generation: ${await response.text()}`);
+        }
+
+        return await response.json();
+      })
+    ]);
+
+    // Return the final status
+    return { jobId, status: "processing" };
   }
 
   /**
@@ -186,7 +165,7 @@ export class GimmeAiTestWorkflow extends WorkflowEntrypoint {
                              state.content && state.options && !state.instanceId;
 
     // For the first step, include the full payload
-    if (stepName === WORKFLOW_CONFIG.steps[0]?.name) {
+    if (stepName === workflowSteps[0]?.name) {
       // For video workflow, use specific format
       if (isVideoWorkflow) {
         return {

@@ -35,18 +35,30 @@
   },
   "workflow": {
     "enabled": true,
-    "type": "video",
+    "type": "dual",
     "steps": [
       {
         "name": "init",
         "endpoint": "/workflow/init",
-        "method": "POST"
+        "method": "POST",
+        "config": {
+          "retries": 3,
+          "timeout": "30 seconds"
+        }
       },
       {
         "name": "generate_script",
         "endpoint": "/workflow/generate_script/{job_id}",
         "method": "POST",
         "depends_on": ["init"],
+        "config": {
+          "retries": {
+            "limit": 3,
+            "delay": "5s",
+            "backoff": "exponential"
+          },
+          "timeout": "2m"
+        },
         "poll": {
           "endpoint": "/workflow/status/{job_id}",
           "interval": "5s",
@@ -58,6 +70,14 @@
         "endpoint": "/workflow/generate_audio/{job_id}",
         "method": "POST",
         "depends_on": ["generate_script"],
+        "config": {
+          "retries": {
+            "limit": 3,
+            "delay": "5s",
+            "backoff": "exponential"
+          },
+          "timeout": "5m"
+        },
         "poll": {
           "endpoint": "/workflow/status/{job_id}",
           "interval": "5s",
@@ -69,6 +89,14 @@
         "endpoint": "/workflow/generate_base_video/{job_id}",
         "method": "POST",
         "depends_on": ["generate_script"],
+        "config": {
+          "retries": {
+            "limit": 3,
+            "delay": "5s",
+            "backoff": "exponential"
+          },
+          "timeout": "5m"
+        },
         "poll": {
           "endpoint": "/workflow/status/{job_id}",
           "interval": "5s",
@@ -80,6 +108,14 @@
         "endpoint": "/workflow/generate_captions/{job_id}",
         "method": "POST",
         "depends_on": ["generate_audio"],
+        "config": {
+          "retries": {
+            "limit": 3,
+            "delay": "5s",
+            "backoff": "exponential"
+          },
+          "timeout": "2m"
+        },
         "poll": {
           "endpoint": "/workflow/status/{job_id}",
           "interval": "5s",
@@ -91,6 +127,14 @@
         "endpoint": "/workflow/combine_final_video/{job_id}",
         "method": "POST",
         "depends_on": ["generate_base_video", "generate_audio", "generate_captions"],
+        "config": {
+          "retries": {
+            "limit": 3,
+            "delay": "5s",
+            "backoff": "exponential"
+          },
+          "timeout": "5m"
+        },
         "poll": {
           "endpoint": "/workflow/status/{job_id}",
           "interval": "5s",
@@ -100,9 +144,8 @@
     ]
   },
   "workflow_defaults": {
-    "polling_interval": "5s",
-    "timeout": "5m",
-    "retry_limit": 3,
-    "retry_delay": "5s"
+    "polling_interval": "5 seconds",
+    "timeout": "5 minutes",
+    "retry_limit": 3
   }
 }

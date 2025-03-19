@@ -63,41 +63,42 @@ export function parseTimeString(timeStr) {
  * @returns {Promise<Object>} - Final response from the endpoint
  */
 export async function pollUntilComplete(step, endpoint, state, interval = "5s", maxAttempts = 60) {
-  const pollingName = `polling_${Date.now()}`;
+  const pollingName = `polling_${state.step}_${state.job_id}`;
+  console.log(`[ID Tracking] Starting polling: ${pollingName} for job_id: ${state.job_id}`);
 
   return await step.loop(pollingName, {
     maxAttempts: maxAttempts,
   }, async (attempt) => {
-    // Format the endpoint URL with state variables
-    const formattedEndpoint = formatEndpoint(endpoint, state);
+    // Don't format the endpoint - it's already complete
+    console.log(`[ID Tracking] Polling attempt ${attempt} for job_id ${state.job_id}`);
+    console.log(`[ID Tracking] Using endpoint: ${endpoint}`);
 
-    // Make the API call
-    const response = await fetch(formattedEndpoint, {
-      method: 'GET',
-      headers: getDefaultHeaders()
+    const response = await fetch(endpoint, {
+      method: 'GET',  // Always use GET for polling
+      headers: {
+        ...getDefaultHeaders(),
+        'X-Auth-Source': 'gimme-ai-gateway',
+        'X-Auth-Mode': 'admin'
+      }
     });
 
     if (!response.ok) {
-      // If the API returns an error, we'll throw to retry the polling
+      console.error(`[ID Tracking] Polling failed for job_id ${state.job_id}:`, await response.text());
       throw new Error(`Polling failed (${response.status}): ${await response.text()}`);
     }
 
     const result = await response.json();
+    console.log(`[ID Tracking] Poll response for job_id ${state.job_id}:`, result);
 
-    // Check if the job is complete or failed
     if (result.status === 'completed' || result.status === 'success') {
-      // Job is complete, return the result and stop polling
+      console.log(`[ID Tracking] Job ${state.job_id} completed successfully`);
       return { status: 'completed', result };
     } else if (result.status === 'failed' || result.status === 'error') {
-      // Job failed, throw an error to stop polling
+      console.error(`[ID Tracking] Job ${state.job_id} failed:`, result);
       throw new Error(`Job failed: ${JSON.stringify(result)}`);
     }
 
-    // Sleep before the next polling attempt
-    const sleepTime = parseTimeString(interval);
-    await new Promise(resolve => setTimeout(resolve, sleepTime));
-
-    // Return a value to continue the loop
+    await step.sleep(`${pollingName}_sleep_${attempt}`, interval);
     return { status: 'pending', attempt, result };
   });
 }
