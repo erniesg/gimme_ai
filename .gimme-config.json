@@ -3,7 +3,7 @@
   "output_dir": "output/gimme-ai-test",
   "endpoints": {
     "dev": "http://localhost:8000",
-    "prod": "https://gimme-ai-test.modal.run"
+    "prod": "https://berlayar-ai--wanx-backend-app-function.modal.run"
   },
   "limits": {
     "free_tier": {
@@ -35,8 +35,69 @@
   },
   "workflow": {
     "enabled": true,
-    "class_name": "Gimme_Ai_TestWorkflow",
-    "config_file": "workflow-config.json"
+    "type": "dual",
+    "steps": [
+      {
+        "name": "init",
+        "endpoint": "/workflow/init",
+        "method": "POST"
+      },
+      {
+        "name": "generate_script",
+        "endpoint": "/workflow/generate_script/{job_id}",
+        "method": "POST",
+        "depends_on": ["init"],
+        "poll": {
+          "endpoint": "/workflow/status/{job_id}",
+          "interval": "5s",
+          "max_attempts": 60
+        }
+      },
+      {
+        "name": "generate_audio",
+        "endpoint": "/workflow/generate_audio/{job_id}",
+        "method": "POST",
+        "depends_on": ["generate_script"],
+        "poll": {
+          "endpoint": "/workflow/status/{job_id}",
+          "interval": "5s",
+          "max_attempts": 60
+        }
+      },
+      {
+        "name": "generate_base_video",
+        "endpoint": "/workflow/generate_base_video/{job_id}",
+        "method": "POST",
+        "depends_on": ["generate_script"],
+        "poll": {
+          "endpoint": "/workflow/status/{job_id}",
+          "interval": "5s",
+          "max_attempts": 60
+        }
+      },
+      {
+        "name": "generate_captions",
+        "endpoint": "/workflow/generate_captions/{job_id}",
+        "method": "POST",
+        "depends_on": ["generate_audio"],
+        "poll": {
+          "endpoint": "/workflow/status/{job_id}",
+          "interval": "5s",
+          "max_attempts": 60
+        }
+      },
+      {
+        "name": "combine_final_video",
+        "endpoint": "/workflow/combine_final_video/{job_id}",
+        "method": "POST",
+        "depends_on": ["generate_base_video", "generate_audio", "generate_captions"],
+        "poll": {
+          "endpoint": "/workflow/status/{job_id}",
+          "interval": "5s",
+          "max_attempts": 60
+        }
+      }
+    ]
   },
   "workflow_defaults": {
     "polling_interval": "5s",

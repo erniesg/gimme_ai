@@ -9,9 +9,13 @@ import requests
 from typing import Optional, Dict, Any
 from pathlib import Path
 from tabulate import tabulate
+from rich.console import Console
+from rich.table import Table
 
 from ..utils.environment import load_env_file
 from ..config import GimmeConfig, load_config
+
+console = Console()
 
 @click.command(name="test")
 @click.argument("url", required=False)
@@ -288,6 +292,25 @@ def test_all_command(
     if admin_pw:
         click.echo("\n🔄 Final cleanup:")
         reset_rate_limits(endpoint, admin_pw, skip_reset_confirm)
+
+@click.command(name="test-workflow-type")
+@click.argument("workflow_type", type=click.Choice(["api", "video"]))
+@click.argument("url", required=False)
+@click.option("--verbose", "-v", is_flag=True, help="Show detailed output")
+@click.option("--admin-password", help="Admin password for authentication")
+@click.option("--env-file", default=".env", help="Path to environment file")
+def test_workflow_type_command(
+    workflow_type: str,
+    url: Optional[str],
+    verbose: bool,
+    admin_password: Optional[str] = None,
+    env_file: str = ".env",
+):
+    """Test a specific workflow type (api or video) with a simple payload."""
+    # Get admin password from env file if not provided
+    admin_pw = get_admin_password(admin_password, env_file)
+
+    test_workflow_type(workflow_type, url, verbose, admin_pw)
 
 # ========== Helper Functions ==========
 
@@ -683,7 +706,8 @@ def test_workflow(
                     click.echo(f"  ❌ Failed to get workflow status: {status_response.status_code}")
                     if verbose:
                         click.echo(status_response.text)
-                    return False
+                    time.sleep(interval)
+                    continue
 
                 try:
                     status_data = status_response.json()
@@ -787,3 +811,186 @@ def test_workflow(
             import traceback
             click.echo(traceback.format_exc())
         return False
+
+def test_workflow_type(workflow_type, url, verbose=False, admin_password=None):
+    """Test a specific workflow type (api or video) with a simple payload."""
+    click.echo(f"DEBUG: Starting test-workflow-type for {workflow_type}")
+
+    # Determine which URL to use
+    if url:
+        endpoint = normalize_url(url)
+    else:
+        # Default to testing against the Cloudflare worker
+        endpoint = "https://gimme-ai-test.erniesg.workers.dev"
+
+    click.echo(f"🧪 Testing {workflow_type} workflow at {endpoint}")
+
+    # Create headers with admin password if available
+    headers = {"Content-Type": "application/json"}
+    if admin_password:
+        headers["Authorization"] = f"Bearer {admin_password}"
+        click.echo("✅ Using admin authentication")
+
+    # Create a simple payload based on workflow type
+    if workflow_type == "api":
+        # For API workflow, directly test the endpoint
+        workflow_url = f"{endpoint}/workflow"
+        test_payload = {
+            "content": "Testing simple API workflow",
+            "requestId": f"test-api-{int(time.time())}"
+        }
+
+        click.echo(f"🚀 Sending request to: {workflow_url}")
+        if verbose:
+            click.echo(f"Request payload: {json.dumps(test_payload, indent=2)}")
+
+        try:
+            click.echo("Making API request...")
+            response = requests.post(workflow_url, json=test_payload, headers=headers)
+
+            # Add explicit timeout handling here
+            click.echo(f"Response status: {response.status_code}")
+
+            if response.status_code == 200:
+                result = response.json()
+                instance_id = result.get("instanceId")
+
+                if instance_id:
+                    click.echo(f"✅ API workflow started successfully. Instance ID: {instance_id}")
+
+                    # Check status
+                    status_url = f"{workflow_url}?instanceId={instance_id}"
+                    click.echo(f"🔍 Checking status at: {status_url}")
+
+                    # Wait a moment for the workflow to process
+                    click.echo("Waiting for workflow to process...")
+                    time.sleep(1)
+
+                    try:
+                        click.echo("Checking workflow status...")
+                        status_response = requests.get(status_url, headers=headers)
+                        click.echo(f"Status response: {status_response.status_code}")
+
+                        if status_response.status_code == 200:
+                            status = status_response.json()
+                            if verbose:
+                                click.echo(f"Status details: {json.dumps(status, indent=2)}")
+                            else:
+                                workflow_state = "unknown"
+                                if "status" in status:
+                                    if isinstance(status["status"], dict):
+                                        workflow_state = status["status"].get("state", "unknown")
+                                    else:
+                                        workflow_state = status["status"]
+                                click.echo(f"Workflow status: {workflow_state}")
+
+                            click.echo("✅ Workflow test completed successfully")
+                            return True
+                        else:
+                            click.echo(f"❌ Failed to check status: {status_response.status_code}")
+                            if status_response.text:
+                                click.echo(f"Status response: {status_response.text[:500]}")
+                    except Exception as e:
+                        click.echo(f"❌ Error checking status: {str(e)}")
+                        if verbose:
+                            import traceback
+                            click.echo(traceback.format_exc())
+                else:
+                    click.echo("❌ No instance ID returned")
+            else:
+                click.echo(f"❌ Failed with status code: {response.status_code}")
+                click.echo(response.text[:500])
+                return False
+        except requests.exceptions.Timeout:
+            click.echo("❌ Request timed out - no response received")
+            return False
+        except Exception as e:
+            click.echo(f"❌ Error: {str(e)}")
+            if verbose:
+                import traceback
+                click.echo(traceback.format_exc())
+            return False
+    elif workflow_type == "video":
+        # For video workflow, use the video generation endpoint
+        video_url = f"{endpoint}/generate_video_stream"
+        test_payload = {
+            "content": "Testing video generation workflow",
+            "requestId": f"test-video-{int(time.time())}"
+        }
+
+        click.echo(f"🚀 Sending request to: {video_url}")
+        if verbose:
+            click.echo(f"Request payload: {json.dumps(test_payload, indent=2)}")
+
+        try:
+            click.echo("Making API request...")
+            # Set a longer timeout for video processing
+            response = requests.post(video_url, json=test_payload, headers=headers, timeout=30)
+
+            # Always log detailed info in this case to debug
+            click.echo(f"Response status: {response.status_code}")
+            click.echo(f"Response headers: {json.dumps(dict(response.headers), indent=2)}")
+            try:
+                click.echo(f"Response body: {json.dumps(response.json(), indent=2)}")
+            except:
+                click.echo(f"Response text: {response.text[:500]}")
+
+            if response.status_code == 200:
+                result = response.json()
+                job_id = result.get("job_id")
+
+                if job_id:
+                    click.echo(f"✅ Video workflow started successfully. Job ID: {job_id}")
+
+                    # Check job status
+                    status_url = f"{endpoint}/job_status/{job_id}"
+                    click.echo(f"🔍 Checking status at: {status_url}")
+
+                    # Wait a moment for the workflow to process
+                    click.echo("Waiting for workflow to process...")
+                    time.sleep(2)  # Videos might need more time
+
+                    try:
+                        click.echo("Checking workflow status...")
+                        status_response = requests.get(status_url, headers=headers)
+                        click.echo(f"Status response: {status_response.status_code}")
+
+                        if status_response.status_code == 200:
+                            status = status_response.json()
+                            if verbose:
+                                click.echo(f"Status details: {json.dumps(status, indent=2)}")
+                            else:
+                                job_state = status.get("status", "unknown")
+                                progress = status.get("progress", "unknown")
+                                click.echo(f"Job status: {job_state}")
+                                click.echo(f"Progress: {progress}")
+
+                            click.echo("✅ Video workflow test completed successfully")
+                            return True
+                        else:
+                            click.echo(f"❌ Failed to check status: {status_response.status_code}")
+                            if status_response.text:
+                                click.echo(f"Status response: {status_response.text[:500]}")
+                    except Exception as e:
+                        click.echo(f"❌ Error checking status: {str(e)}")
+                        if verbose:
+                            import traceback
+                            click.echo(traceback.format_exc())
+                else:
+                    click.echo("❌ No job ID returned")
+            else:
+                click.echo(f"❌ Failed with status code: {response.status_code}")
+                click.echo(response.text[:500])
+                return False
+        except requests.exceptions.Timeout:
+            click.echo("❌ Request timed out - no response received")
+            return False
+        except Exception as e:
+            click.echo(f"❌ Error: {str(e)}")
+            if verbose:
+                import traceback
+                click.echo(traceback.format_exc())
+            return False
+
+    click.echo("⚠️ Test completed with unclear results")
+    return False

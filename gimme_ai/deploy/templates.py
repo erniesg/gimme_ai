@@ -380,9 +380,9 @@ def generate_workflow_utils_script(config: GimmeConfig, output_dir: Path) -> Opt
 
     return output_path
 
-def generate_workflow_script(config: GimmeConfig, output_dir: Path) -> Optional[Path]:
+def generate_workflow_script(config: GimmeConfig, output_dir: Optional[Path] = None) -> Optional[Path]:
     """
-    Generate the Cloudflare workflow script from configuration.
+    Generate the workflow.js script based on configuration.
 
     Args:
         config: The application configuration
@@ -391,49 +391,111 @@ def generate_workflow_script(config: GimmeConfig, output_dir: Path) -> Optional[
     Returns:
         Path to the saved workflow script or None if workflow is not enabled
     """
-    # Check if workflow is enabled
+    # Convert output_dir to Path if it's a string
+    if isinstance(output_dir, str):
+        output_dir = Path(output_dir)
+
+    # Default to 'dist' if not provided
+    output_dir = output_dir or Path('dist')
+
+    # Make sure the output directory exists
+    os.makedirs(output_dir, exist_ok=True)
+
+    # First, check if workflow support is enabled
     workflow_config = getattr(config, 'workflow', None)
     if not workflow_config or not getattr(workflow_config, 'enabled', False):
-        print("Workflow is not enabled in configuration, skipping workflow script generation")
+        print("Workflow support is disabled, skipping workflow.js generation")
         return None
 
-    # Load the workflow template from the package
-    template_path = Path(__file__).parent.parent / "templates" / "workflow.js"
-    template = load_template(template_path)
+    # Define TEMPLATES_DIR
+    TEMPLATES_DIR = Path(__file__).parent.parent / "templates"
 
-    # Create the context for rendering
-    # Derive workflow class name from project name consistently
-    workflow_class_name = getattr(workflow_config, 'class_name', None)
-    if not workflow_class_name:
-        # Convert project name to PascalCase for class name
-        project_parts = config.project_name.split('-')
-        workflow_class_name = ''.join(part.title() for part in project_parts) + 'Workflow'
+    # Get workflow template path
+    workflow_template_path = TEMPLATES_DIR / 'workflow.js'
 
-    workflow_binding = config.project_name.upper().replace('-', '_') + '_WORKFLOW'
+    if not workflow_template_path.exists():
+        print(f"Workflow template not found at {workflow_template_path}")
+        return None
 
-    # Get workflow steps from config if available
+    # Get workflow type
+    workflow_type = getattr(workflow_config, 'type', 'api')
+
+    # Get workflow steps
     workflow_steps = getattr(workflow_config, 'steps', [])
 
-    # Get workflow defaults from config
-    workflow_defaults = getattr(workflow_config, 'defaults', {
-        'retry_limit': 3,
-        'timeout': '5m',
-        'polling_interval': '5s',
-        'method': 'POST'
-    })
+    # Derive consistent class name from project name (PascalCase + "Workflow")
+    project_parts = config.project_name.split('-')
+    derived_class_name = ''.join(part.title() for part in project_parts) + 'Workflow'
 
-    context = {
-        "project_name": config.project_name,
-        "workflow_class_name": workflow_class_name,
-        "workflow_binding": workflow_binding,
-        "required_keys": config.required_keys,
-        "workflow_steps": workflow_steps,
-        "workflow_defaults": workflow_defaults
-    }
+    # Use the derived class name
+    workflow_class_name = derived_class_name
+
+    # Generate consistent workflow binding name (SCREAMING_SNAKE_CASE + "_WORKFLOW")
+    workflow_binding = config.project_name.upper().replace('-', '_') + '_WORKFLOW'
+
+    # Get endpoints from config
+    dev_endpoint = config.endpoints.dev if hasattr(config, 'endpoints') and hasattr(config.endpoints, 'dev') else 'http://localhost:8000'
+    prod_endpoint = config.endpoints.prod if hasattr(config, 'endpoints') and hasattr(config.endpoints, 'prod') else 'https://gimme-ai-test.modal.run'
+
+    # Set up Jinja environment
+    env = Environment(loader=FileSystemLoader(TEMPLATES_DIR))
+
+    # Load the template
+    try:
+        template = env.get_template('workflow.js')
+    except Exception as e:
+        print(f"Error loading workflow template: {e}")
+        template = Template(workflow_template_path.read_text())
 
     # Render the template
-    output_path = output_dir / "workflow.js"
-    save_template(template, context, output_path)
-    print(f"Workflow script saved to: {output_path}")
+    context = {
+        "project_name": config.project_name,
+        "workflow": {
+            "type": workflow_type,
+            "steps": workflow_steps,
+            "enabled": True
+        },
+        "workflow_class_name": workflow_class_name,
+        "workflow_binding": workflow_binding,
+        "endpoints": {
+            "dev": dev_endpoint,
+            "prod": prod_endpoint
+        }
+    }
 
-    return output_path
+    try:
+        workflow_js = template.render(**context)
+    except Exception as e:
+        print(f"Error rendering workflow template: {e}")
+        print(f"Context: {context}")
+        raise
+
+    # Write the rendered template to the output directory
+    workflow_js_path = output_dir / 'workflow.js'
+    workflow_js_path.write_text(workflow_js)
+
+    # Create handlers directory if it doesn't exist
+    handlers_dir = output_dir / 'handlers'
+    handlers_dir.mkdir(exist_ok=True)
+
+    # Generate appropriate handler based on workflow type
+    if workflow_type == 'video':
+        video_handler_template_path = TEMPLATES_DIR / 'handlers' / 'video_workflow.js'
+        if video_handler_template_path.exists():
+            video_handler_js = video_handler_template_path.read_text()
+            video_handler_js_path = handlers_dir / 'video_workflow.js'
+            video_handler_js_path.write_text(video_handler_js)
+            print(f"Generated video workflow handler at {video_handler_js_path}")
+    elif workflow_type == 'api':
+        api_handler_template_path = TEMPLATES_DIR / 'handlers' / 'api_workflow.js'
+        if api_handler_template_path.exists():
+            api_handler_js = api_handler_template_path.read_text()
+            api_handler_js_path = handlers_dir / 'api_workflow.js'
+            api_handler_js_path.write_text(api_handler_js)
+            print(f"Generated API workflow handler at {api_handler_js_path}")
+
+    # Also generate the workflow utils
+    generate_workflow_utils_script(config, output_dir)
+
+    print(f"Generated workflow.js at {workflow_js_path}")
+    return workflow_js_path

@@ -41,11 +41,14 @@ from .commands_test import (
     test_rate_limits_command,
     test_workflow_command,
     test_all_command,
+    test_workflow_type_command,
 )
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+print("Loading commands.py")
 
 @click.group()
 @click.version_option()
@@ -134,6 +137,33 @@ def validate_command(config_file: str, env_file: str):
 
     click.echo("All validations passed successfully!")
 
+@click.command()
+@click.argument('workflow_type', type=click.Choice(['api', 'video']))
+@click.argument('url', required=False)
+@click.option('--verbose', is_flag=True, help='Print verbose output')
+@click.option('--admin-password', help='Admin password for authentication')
+@click.option('--env-file', default='.env', help='Path to environment file')
+def test_workflow_type_command_click(workflow_type, url, verbose, admin_password=None, env_file='.env'):
+    """Test a specific workflow type."""
+    print("Command executed: test-workflow-type", workflow_type, url)
+
+    # Call the function directly, not the Click command
+    from .commands_test import test_workflow_type  # Import the function
+
+    try:
+        # Get admin password from env file if not provided
+        from .commands_test import get_admin_password
+        admin_pw = get_admin_password(admin_password, env_file)
+
+        success = test_workflow_type(workflow_type, url, verbose, admin_pw)
+        if not success:
+            sys.exit(1)
+    except Exception as e:
+        print(f"Error testing workflow type: {e}")
+        import traceback
+        print(traceback.format_exc())
+        sys.exit(1)
+
 # Register all commands
 cli.add_command(init_command)
 cli.add_command(deploy_command)
@@ -143,3 +173,4 @@ cli.add_command(test_auth_command)
 cli.add_command(test_rate_limits_command)
 cli.add_command(test_workflow_command)
 cli.add_command(test_all_command)
+cli.add_command(test_workflow_type_command_click, name='test-workflow-type')

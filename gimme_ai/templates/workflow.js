@@ -2,14 +2,31 @@
 import { WorkflowEntrypoint } from 'cloudflare:workers';
 import * as WorkflowUtils from './workflow_utils.js';
 
+// Import specialized handlers
+{% if workflow.type == 'video' %}
+import './handlers/video_workflow.js';
+{% elif workflow.type == 'api' %}
+import './handlers/api_workflow.js';
+{% elif workflow.type == 'dual' %}
+import './handlers/api_workflow.js';
+import './handlers/video_workflow.js';
+{% elif workflow.type == 'custom' %}
+import './handlers/custom_workflow.js';
+{% endif %}
+
 // Workflow configuration - this will be replaced with actual config during deployment
 const WORKFLOW_CONFIG = {
+  type: "{{ workflow.type | default('api') }}",
   steps: [],
   defaults: {
     retry_limit: 3,
     timeout: "5m",
     polling_interval: "5s",
     method: "POST"
+  },
+  endpoints: {
+    dev: "{{ endpoints.dev }}",
+    prod: "{{ endpoints.prod }}"
   }
 };
 
@@ -49,8 +66,16 @@ export class {{ workflow_class_name }} extends WorkflowEntrypoint {
           timeout: stepConfig.timeout || WORKFLOW_CONFIG.defaults.timeout || "5m"
         },
         async () => {
+          // Get API base URL from environment, payload, or config
+          const baseUrl = this.env.MODAL_ENDPOINT ||
+                          state.apiBaseUrl ||
+                          WORKFLOW_CONFIG.endpoints.prod;
+
+          // Get auth mode (admin by default)
+          const authMode = 'admin';
+
           // Format the endpoint URL
-          const endpoint = WorkflowUtils.formatEndpoint(stepConfig.endpoint, state);
+          const endpoint = WorkflowUtils.formatEndpoint(stepConfig.endpoint, state, baseUrl);
 
           // Determine method
           const method = stepConfig.method || WORKFLOW_CONFIG.defaults.method || 'POST';
@@ -58,12 +83,18 @@ export class {{ workflow_class_name }} extends WorkflowEntrypoint {
           // Prepare request body
           const body = this.getRequestBody(stepConfig.name, state);
 
+          // Prepare config for API calls
+          const apiConfig = {
+            baseUrl,
+            headers: WorkflowUtils.getDefaultHeaders({ auth_mode: authMode })
+          };
+
           // Make the API call
           console.log(`Executing step: ${stepConfig.name}, endpoint: ${endpoint}`);
 
           const response = await fetch(endpoint, {
             method: method,
-            headers: WorkflowUtils.getDefaultHeaders(),
+            headers: apiConfig.headers,
             body: method !== 'GET' ? JSON.stringify(body) : undefined
           });
 
@@ -71,7 +102,12 @@ export class {{ workflow_class_name }} extends WorkflowEntrypoint {
             throw new Error(`Step ${stepConfig.name} failed (${response.status}): ${await response.text()}`);
           }
 
-          const result = await response.json();
+          let result;
+          if (response.headers.get('Content-Type')?.includes('application/json')) {
+            result = await response.json();
+          } else {
+            result = { text: await response.text() };
+          }
 
           // If this step has polling configured, poll until complete
           if (stepConfig.poll) {
@@ -79,6 +115,7 @@ export class {{ workflow_class_name }} extends WorkflowEntrypoint {
               step,
               stepConfig.poll.endpoint,
               {...state, ...result},
+              apiConfig,
               stepConfig.poll.interval || WORKFLOW_CONFIG.defaults.polling_interval || "5s",
               stepConfig.poll.max_attempts || 60
             );
@@ -109,7 +146,7 @@ export class {{ workflow_class_name }} extends WorkflowEntrypoint {
       status: "completed",
       requestId: state.requestId,
       duration: `${duration}ms`,
-      ...state
+      output: state
     };
   }
 
@@ -117,18 +154,29 @@ export class {{ workflow_class_name }} extends WorkflowEntrypoint {
    * Get request body for a step
    */
   getRequestBody(stepName, state) {
+    // Determine if this is a video or API workflow based on URL path or payload properties
+    const isVideoWorkflow = state.workflow_type === 'video' ||
+                             state.content && state.options && !state.instanceId;
+
     // For the first step, include the full payload
     if (stepName === WORKFLOW_CONFIG.steps[0]?.name) {
+      // For video workflow, use specific format
+      if (isVideoWorkflow) {
+        return {
+          content: state.content,
+          options: state.options || {}
+        };
+      }
+      // For API workflow, pass through all parameters
       return {
-        content: state.content,
-        options: state.options || {}
+        ...state
       };
     }
 
     // For subsequent steps, include minimal information
     return {
       requestId: state.requestId,
-      job_id: state.job_id
+      job_id: state.job_id || state.instanceId
     };
   }
 }
@@ -139,74 +187,111 @@ export class {{ workflow_class_name }} extends WorkflowEntrypoint {
 export const workflowHandler = {
   async fetch(request, env) {
     const url = new URL(request.url);
-
-    // Only handle /workflow requests
-    if (!url.pathname.startsWith('/workflow')) {
-      return new Response('Not found', { status: 404 });
-    }
+    const workflowBinding = "{{ project_name | upper | replace('-', '_') }}_WORKFLOW";
 
     try {
-      // Check for status requests
-      const instanceId = url.searchParams.get('instanceId');
-      if (instanceId) {
-        try {
-          const instance = await env.{{ project_name | upper | replace('-', '_') }}_WORKFLOW.get(instanceId);
-          const status = await instance.status();
-          return Response.json({ status });
-        } catch (error) {
-          return Response.json({
-            error: 'Invalid instance ID',
-            message: String(error)
-          }, { status: 404 });
-        }
+      console.log(`Processing workflow request: ${url.pathname}`);
+      console.log(`Available env bindings: ${Object.keys(env).join(", ")}`);
+
+      // Add workflow_type to the request based on URL path
+      let handler;
+      let workflowType;
+
+      if (url.pathname === '/generate_video_stream' || url.pathname.startsWith('/job_status/')) {
+        handler = globalThis.videoWorkflowHandler;
+        workflowType = 'video';
+      } else if (url.pathname.startsWith('/workflow')) {
+        handler = globalThis.apiWorkflowHandler;
+        workflowType = 'api';
       }
 
-      // Create new workflow instance
-      let params = {};
-      if (request.method === 'POST') {
-        try {
-          params = await request.json();
-        } catch (e) {
-          return Response.json({
-            error: 'Invalid JSON',
-            message: String(e)
-          }, { status: 400 });
-        }
+      // Process the request using the handler
+      if (handler && handler.processWorkflowRequest) {
+        return await handler.processWorkflowRequest(
+          request,
+          env,
+          WORKFLOW_CONFIG,
+          workflowBinding,
+          workflowType
+        );
       }
 
-      // Add requestId if not provided
-      if (!params.requestId) {
-        params.requestId = crypto.randomUUID();
-      }
-
-      // Create the workflow instance
-      const instance = await env.{{ project_name | upper | replace('-', '_') }}_WORKFLOW.create(params);
-
-      // Store the mapping between requestId and instanceId in Durable Storage if available
-      if (env.DURABLE_STORAGE && params.requestId) {
-        try {
-          await env.DURABLE_STORAGE.put(`workflow:${params.requestId}`, instance.id);
-          console.log(`Stored workflow mapping: ${params.requestId} -> ${instance.id}`);
-        } catch (error) {
-          console.error("Failed to store workflow mapping:", error);
-        }
-      }
-
-      return Response.json({
-        success: true,
-        message: 'Workflow started',
-        instanceId: instance.id,
-        requestId: params.requestId
-      });
+      // Fall back to default processing
+      return await defaultWorkflowRequestHandler(request, env, workflowBinding, workflowType);
     } catch (error) {
-      // Log the full error for debugging
-      console.error('Workflow error:', error);
-
+      console.error('Workflow error:', error, 'Available bindings:', Object.keys(env));
       return Response.json({
         success: false,
         error: 'Workflow error',
-        message: String(error)
+        message: String(error),
+        availableBindings: Object.keys(env)
       }, { status: 500 });
     }
   }
 };
+
+/**
+ * Default workflow request handler (backwards compatible)
+ */
+async function defaultWorkflowRequestHandler(request, env, workflowClass, workflowType) {
+  const url = new URL(request.url);
+
+  if (!url.pathname.startsWith('/workflow')) {
+    return new Response('Not found', { status: 404 });
+  }
+
+  // Check for status requests
+  const instanceId = url.searchParams.get('instanceId');
+  if (instanceId) {
+    try {
+      const instance = await env[workflowClass].get(instanceId);
+      const status = await instance.status();
+      return Response.json({ status });
+    } catch (error) {
+      return Response.json({
+        error: 'Invalid instance ID',
+        message: String(error)
+      }, { status: 404 });
+    }
+  }
+
+  // Create new workflow instance
+  let params = {};
+  if (request.method === 'POST') {
+    try {
+      params = await request.json();
+    } catch (e) {
+      return Response.json({
+        error: 'Invalid JSON',
+        message: String(e)
+      }, { status: 400 });
+    }
+  }
+
+  // Add requestId if not provided
+  if (!params.requestId) {
+    params.requestId = crypto.randomUUID();
+  }
+
+  try {
+    const instance = await env[workflowClass].create({
+      ...params,
+      requestId: params.requestId,
+      workflow_type: workflowType || 'api'
+    });
+    return Response.json({
+      success: true,
+      instanceId: instance.id,
+      requestId: params.requestId,
+      message: 'Workflow started'
+    });
+  } catch (error) {
+    console.error("Workflow creation error:", error, "Class:", workflowClass, "Available bindings:", Object.keys(env));
+    return Response.json({
+      success: false,
+      error: 'Failed to start workflow',
+      message: String(error),
+      availableBindings: Object.keys(env)
+    }, { status: 500 });
+  }
+}
