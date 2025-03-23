@@ -70,7 +70,8 @@ def test_generate_deployment_files(test_config, temp_dir):
             assert "IPRateLimiter" in config_content
 
 @patch("subprocess.run")
-def test_deploy_to_cloudflare_success(mock_run, test_config, temp_dir):
+@patch("subprocess.Popen")
+def test_deploy_to_cloudflare_success(mock_popen, mock_run, test_config, temp_dir):
     """Test successful deployment to Cloudflare."""
     output_dir = Path(temp_dir)
 
@@ -79,8 +80,16 @@ def test_deploy_to_cloudflare_success(mock_run, test_config, temp_dir):
     (output_dir / "durable_objects.js").write_text("// DO script")
     (output_dir / "wrangler.toml").write_text("name = 'test-project'")
 
+    # Mock subprocess.run
     mock_run.return_value.returncode = 0
     mock_run.return_value.stdout = "Published to https://test-project.workers.dev"
+    mock_run.return_value.stderr = ""
+
+    # Mock subprocess.Popen
+    mock_process = MagicMock()
+    mock_process.communicate.return_value = ("success", "")
+    mock_process.returncode = 0
+    mock_popen.return_value = mock_process
 
     with patch.dict(os.environ, {"MODAL_TOKEN_ID": "test-id", "MODAL_TOKEN_SECRET": "test-secret", "GIMME_ADMIN_PASSWORD": "test-password"}):
         deployment_files = DeploymentResult(

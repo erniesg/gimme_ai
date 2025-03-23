@@ -79,27 +79,32 @@ def test_generate_worker_script():
         required_keys=["MODAL_TOKEN_ID", "MODAL_TOKEN_SECRET"]
     )
 
-    # Create a mock template that will properly render the numeric values
-    mock_template = """
-    const PROJECT_NAME = "{{ project_name }}";
-    const DEV_ENDPOINT = "{{ dev_endpoint }}";
-    const PROD_ENDPOINT = "{{ prod_endpoint }}";
-    {% for key in required_keys %}
-    // {{ key }}
-    {% endfor %}
-    """
+    # Create a temporary directory for output files
+    with tempfile.TemporaryDirectory() as tmpdir:
+        output_dir = Path(tmpdir)
 
-    # Mock the template loading
-    with patch("gimme_ai.deploy.templates.load_template", return_value=mock_template):
-        script = generate_worker_script(config)
+        # Update the mock template to match the actual context structure
+        mock_template = """
+        const PROJECT_NAME = "{{ project_name }}";
+        const DEV_ENDPOINT = "{{ dev_endpoint }}";
+        const PROD_ENDPOINT = "{{ prod_endpoint }}";
+        {% for key in required_keys %}
+        // {{ key }}
+        {% endfor %}
+        """
 
-        # Check that the script contains important parts
-        assert "test-project" in script
-        assert "http://localhost:8000" in script
-        assert "https://example.com" in script
-        # Check for API key references in comments
-        assert "// MODAL_TOKEN_ID" in script
-        assert "// MODAL_TOKEN_SECRET" in script
+        # Mock the template loading
+        with patch("gimme_ai.deploy.templates.load_template", return_value=mock_template):
+            script = generate_worker_script(config, output_dir)
+
+            # Check that the script contains important parts
+            with open(script, "r") as f:
+                content = f.read()
+                assert "test-project" in content
+                assert "http://localhost:8000" in content
+                assert "https://example.com" in content
+                assert "// MODAL_TOKEN_ID" in content
+                assert "// MODAL_TOKEN_SECRET" in content
 
 def test_generate_durable_objects_script():
     """Test generating the Durable Objects script from config."""
@@ -110,47 +115,47 @@ def test_generate_durable_objects_script():
         required_keys=["MODAL_TOKEN_ID", "MODAL_TOKEN_SECRET"]
     )
 
-    # Test direct rendering first to diagnose the issue
-    test_template = """
-    export class IPRateLimiter {
-      constructor(state, env) {
-        this.limit = {{ limits.free_tier.per_ip }};
-      }
-    }
+    # Create a temporary directory for output files
+    with tempfile.TemporaryDirectory() as tmpdir:
+        output_dir = Path(tmpdir)
 
-    export class GlobalRateLimiter {
-      constructor(state, env) {
-        this.limit = {{ limits.free_tier.global }};
-      }
-    }
-    """
+        # Test direct rendering first to diagnose the issue
+        test_template = """
+        export class IPRateLimiter {
+          constructor(state, env) {
+            this.limit = {{ limits.free_tier.per_ip }};
+          }
+        }
 
-    # Direct call to render_template to verify Jinja2 rendering
-    context = {
-        "project_name": "test-project",
-        "limits": {"free_tier": {"per_ip": 5, "global": 100}}
-    }
-    direct_result = render_template(test_template, context)
+        export class GlobalRateLimiter {
+          constructor(state, env) {
+            this.limit = {{ limits.free_tier.global_limit }};
+          }
+        }
+        """
 
-    # Print the direct result for debugging
-    print(f"Direct rendering result: {direct_result}")
+        # Direct call to render_template to verify Jinja2 rendering
+        context = {
+            "project_name": "test-project",
+            "limits": {"free_tier": {"per_ip": 5, "global_limit": 100}}
+        }
+        direct_result = render_template(test_template, context)
 
-    # Check if both values got rendered
-    assert "5" in direct_result
-    assert "100" in direct_result
+        # Check if both values got rendered
+        assert "5" in direct_result
+        assert "100" in direct_result
 
-    # Now test with mocked load_template
-    with patch("gimme_ai.deploy.templates.load_template", return_value=test_template):
-        script = generate_durable_objects_script(config)
+        # Now test with mocked load_template
+        with patch("gimme_ai.deploy.templates.load_template", return_value=test_template):
+            script = generate_durable_objects_script(config, output_dir)
 
-        # Print the script result for debugging
-        print(f"Script generation result: {script}")
-
-        # Simplified assertions
-        assert "IPRateLimiter" in script
-        assert "GlobalRateLimiter" in script
-        assert "5" in script
-        assert "100" in script
+            # Check the contents of the generated file
+            with open(script, "r") as f:
+                content = f.read()
+                assert "IPRateLimiter" in content
+                assert "GlobalRateLimiter" in content
+                assert "5" in content
+                assert "100" in content
 
 def test_generate_wrangler_config():
     """Test generating the wrangler.toml configuration."""

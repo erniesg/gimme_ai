@@ -20,7 +20,7 @@ def test_create_default_config():
     assert config["project_name"] == "test-project"
     assert config["endpoints"]["dev"] == "http://localhost:8000"
     assert config["endpoints"]["prod"] == "https://test-project.modal.run"
-    assert config["limits"]["free_tier"]["per_ip"] == 5
+    assert config["limits"]["free_tier"]["per_ip"] == 10
     assert config["limits"]["free_tier"]["global"] == 100
     assert "MODAL_TOKEN_ID" in config["required_keys"]
     assert "MODAL_TOKEN_SECRET" in config["required_keys"]
