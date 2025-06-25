@@ -11,6 +11,7 @@ from urllib.parse import urljoin, urlparse
 import requests
 from requests.exceptions import RequestException, Timeout, ConnectionError
 from ..config.workflow import AuthConfig, RetryConfig
+from .r2_client import R2Client
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +47,7 @@ class WorkflowHTTPClient:
         self.auth_config: Optional[AuthConfig] = None
         self.retry_config: Optional[RetryConfig] = None
         self.session = requests.Session()
+        self.r2_client: Optional[R2Client] = None
         
         # Set default headers
         self.session.headers.update({
@@ -381,9 +383,60 @@ class WorkflowHTTPClient:
         
         return current
     
-    def upload_to_r2(self, file_path: str, bucket: str, key: str) -> str:
+    def setup_r2_client(self) -> None:
+        """Initialize R2 client from environment variables if available."""
+        try:
+            self.r2_client = R2Client.from_env()
+            logger.info("R2 client initialized successfully")
+        except ValueError as e:
+            logger.debug(f"R2 client not available: {e}")
+            self.r2_client = None
+    
+    async def upload_to_r2(self, 
+                          file_path: str, 
+                          bucket: str, 
+                          key: str,
+                          metadata: Optional[Dict[str, str]] = None) -> str:
         """Upload file to R2 storage and return URL."""
-        # This would require R2/S3 credentials and boto3
-        # For now, return a mock URL
-        logger.info(f"Would upload {file_path} to R2://{bucket}/{key}")
-        return f"https://{bucket}.r2.dev/{key}"
+        if not self.r2_client:
+            self.setup_r2_client()
+            
+        if not self.r2_client:
+            # Fallback to mock URL if R2 not configured
+            logger.warning(f"R2 not configured, returning mock URL for {file_path}")
+            return f"https://mock.r2.dev/{bucket}/{key}"
+            
+        return self.r2_client.upload_file(file_path, bucket, key, metadata=metadata)
+    
+    async def upload_data_to_r2(self,
+                               data: bytes,
+                               bucket: str, 
+                               key: str,
+                               content_type: Optional[str] = None,
+                               metadata: Optional[Dict[str, str]] = None) -> str:
+        """Upload data bytes to R2 storage and return URL."""
+        if not self.r2_client:
+            self.setup_r2_client()
+            
+        if not self.r2_client:
+            # Fallback to mock URL if R2 not configured  
+            logger.warning(f"R2 not configured, returning mock URL for data upload")
+            return f"https://mock.r2.dev/{bucket}/{key}"
+            
+        return self.r2_client.upload_bytes(data, bucket, key, content_type, metadata)
+    
+    async def download_and_store_in_r2(self,
+                                      url: str,
+                                      bucket: str,
+                                      key: str,
+                                      metadata: Optional[Dict[str, str]] = None) -> str:
+        """Download file from URL and store in R2."""
+        if not self.r2_client:
+            self.setup_r2_client()
+            
+        if not self.r2_client:
+            # Fallback to mock URL if R2 not configured
+            logger.warning(f"R2 not configured, returning mock URL for {url}")
+            return f"https://mock.r2.dev/{bucket}/{key}"
+            
+        return self.r2_client.download_and_upload(url, bucket, key, metadata)
