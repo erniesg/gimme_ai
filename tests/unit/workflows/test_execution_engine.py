@@ -170,7 +170,11 @@ class TestWorkflowExecutionEngine:
             method="POST",
             payload=None,
             headers=None,
-            timeout=None
+            timeout=None,
+            download_as_file=False,
+            upload_files=None,
+            poll_for_completion=False,
+            poll_config=None
         )
     
     @pytest.mark.asyncio
@@ -212,7 +216,11 @@ class TestWorkflowExecutionEngine:
             method="POST",
             payload=expected_payload,
             headers=None,
-            timeout=None
+            timeout=None,
+            download_as_file=False,
+            upload_files=None,
+            poll_for_completion=False,
+            poll_config=None
         )
     
     @pytest.mark.asyncio
@@ -233,7 +241,11 @@ class TestWorkflowExecutionEngine:
             method="POST",
             payload={"static": "data"},
             headers=None,
-            timeout=None
+            timeout=None,
+            download_as_file=False,
+            upload_files=None,
+            poll_for_completion=False,
+            poll_config=None
         )
     
     @pytest.mark.asyncio
@@ -263,7 +275,11 @@ class TestWorkflowExecutionEngine:
             method="POST",
             payload=expected_payload,
             headers=None,
-            timeout=None
+            timeout=None,
+            download_as_file=False,
+            upload_files=None,
+            poll_for_completion=False,
+            poll_config=None
         )
     
     @pytest.mark.asyncio

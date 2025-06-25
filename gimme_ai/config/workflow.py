@@ -115,8 +115,8 @@ class RetryConfig(BaseModel):
         if v is None:
             return v
         
-        if not re.match(r'^\d+[smh]$', v):
-            raise ValueError("Duration must be in format '5s', '1m', or '2h'")
+        if not re.match(r'^(\d+\.?\d*|\.\d+)[smh]$', v):
+            raise ValueError("Duration must be in format '5s', '1.5m', or '2h'")
         return v
     
     def parse_delay_seconds(self) -> float:

@@ -37,6 +37,7 @@ class StepExecutionResult:
     error: Optional[str] = None
     execution_time: Optional[float] = None
     retry_count: int = 0
+    execution_order: int = 0
 
 
 @dataclass 
@@ -66,6 +67,7 @@ class WorkflowExecutionEngine:
         self.execution_context: Dict[str, Any] = {}
         self.step_results: Dict[str, StepExecutionResult] = {}
         self.resource_manager = resource_manager or get_global_resource_manager()
+        self.current_execution_order = 0
     
     async def execute_workflow(self, workflow: WorkflowConfig) -> WorkflowExecutionResult:
         """
@@ -106,6 +108,7 @@ class WorkflowExecutionEngine:
                 if len(phase_steps) == 1:
                     # Single step - execute directly
                     result = await self._execute_step(phase_steps[0])
+                    result.execution_order = phase_index
                     self._add_step_result(result)
                     
                     if not result.success and not phase_steps[0].continue_on_error:
@@ -116,6 +119,7 @@ class WorkflowExecutionEngine:
                     results = await self._execute_parallel_steps(phase_steps)
                     
                     for result in results:
+                        result.execution_order = phase_index
                         self._add_step_result(result)
                         
                         if not result.success and not self._get_step_config(result.step_name, phase_steps).continue_on_error:
