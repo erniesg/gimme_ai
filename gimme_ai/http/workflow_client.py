@@ -12,8 +12,9 @@ import requests
 from requests.exceptions import RequestException, Timeout, ConnectionError
 from ..config.workflow import AuthConfig, RetryConfig
 from .r2_client import R2Client
+from ..utils.security import get_secure_logger, mask_secrets
 
-logger = logging.getLogger(__name__)
+logger = get_secure_logger(__name__)
 
 
 class AuthenticationError(Exception):
@@ -169,13 +170,15 @@ class WorkflowHTTPClient:
                 retry_count += 1
                 
                 if retry_count > self.retry_config.limit:
-                    logger.error(f"Request failed after {self.retry_config.limit} retries: {e}")
-                    raise RetryExhaustedError(f"Request failed after {self.retry_config.limit} retries: {e}")
+                    safe_error = mask_secrets(str(e))
+                    logger.error(f"Request failed after {self.retry_config.limit} retries: {safe_error}")
+                    raise RetryExhaustedError(f"Request failed after {self.retry_config.limit} retries: {safe_error}")
                 
                 # Calculate delay based on backoff strategy
                 current_delay = self._calculate_backoff_delay(delay, retry_count)
                 
-                logger.warning(f"Request failed (attempt {retry_count}), retrying in {current_delay}s: {e}")
+                safe_error = mask_secrets(str(e))
+                logger.warning(f"Request failed (attempt {retry_count}), retrying in {current_delay}s: {safe_error}")
                 time.sleep(current_delay)
         
         # This shouldn't be reached
@@ -195,13 +198,21 @@ class WorkflowHTTPClient:
     def _execute_request(self, request_kwargs: Dict[str, Any]) -> Any:
         """Execute a single HTTP request."""
         try:
-            logger.debug(f"Making {request_kwargs['method']} request to {request_kwargs['url']}")
+            # Log request details with masked sensitive data
+            safe_kwargs = request_kwargs.copy()
+            if 'headers' in safe_kwargs:
+                from ..utils.security import default_masker
+                safe_kwargs['headers'] = default_masker.mask_headers(safe_kwargs['headers'])
+            
+            logger.debug(f"Making {safe_kwargs['method']} request to {safe_kwargs['url']}")
             
             response = self.session.request(**request_kwargs)
             
             # Check for HTTP errors
             if response.status_code >= 400:
-                error_msg = f"HTTP {response.status_code}: {response.text}"
+                # Mask sensitive data in error responses
+                error_text = mask_secrets(response.text) if response.text else "No response body"
+                error_msg = f"HTTP {response.status_code}: {error_text}"
                 if response.status_code == 401:
                     raise AuthenticationError(error_msg)
                 else:
@@ -211,17 +222,18 @@ class WorkflowHTTPClient:
             return self._parse_response(response)
             
         except Timeout as e:
-            raise TimeoutError(f"Request timed out: {e}")
+            raise TimeoutError(f"Request timed out: {mask_secrets(str(e))}")
         
         except ConnectionError as e:
-            raise Exception(f"Connection error: {e}")
+            raise Exception(f"Connection error: {mask_secrets(str(e))}")
         
         except RequestException as e:
             if hasattr(e, 'response') and e.response is not None:
-                error_msg = f"HTTP {e.response.status_code}: {e.response.text}"
+                error_text = mask_secrets(e.response.text) if e.response.text else "No response body"
+                error_msg = f"HTTP {e.response.status_code}: {error_text}"
                 if e.response.status_code == 401:
                     raise AuthenticationError(error_msg)
-            raise Exception(f"Request failed: {e}")
+            raise Exception(f"Request failed: {mask_secrets(str(e))}")
     
     def _parse_response(self, response: requests.Response) -> Any:
         """Parse HTTP response."""
