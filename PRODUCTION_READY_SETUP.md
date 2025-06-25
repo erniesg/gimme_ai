@@ -8,6 +8,9 @@ All components tested and working end-to-end:
 - ✅ **CLI Commands** (init, deploy, workflow, secrets)
 - ✅ **Testing Infrastructure** (unit tests, integration tests, mock APIs)
 - ✅ **Error Handling** (retry logic, validation, comprehensive logging)
+- ✅ **Singapore Timezone Scheduler** (SGT to UTC conversion for Cloudflare Workers)
+- ✅ **Derivativ Templates** (Cambridge IGCSE question generation workflows)
+- ✅ **Advanced Workflow Engine** (dependency management, parallel execution, file operations)
 
 ---
 
@@ -200,6 +203,20 @@ gimme-ai secrets sync-cloudflare --environment production
 # Create new workflows
 gimme-ai wf init --name my-workflow --template content-creation
 gimme-ai wf init --name questions --template api-orchestration
+
+# Derivativ-specific templates (NEW!)
+gimme-ai wf generate derivativ_daily \
+  --subjects mathematics,physics,chemistry \
+  --grade-level 9 \
+  --questions-per-topic 8 \
+  --output derivativ_workflow.yaml
+
+# Singapore timezone conversion (NEW!)
+python -c "
+from gimme_ai.utils.singapore_scheduler import SingaporeScheduler
+scheduler = SingaporeScheduler()
+print('2 AM SGT =', scheduler.convert_time_to_utc_cron('02:00', 'daily'))
+"
 
 # Validate and execute
 gimme-ai wf validate workflow.yaml

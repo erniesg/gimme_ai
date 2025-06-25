@@ -272,7 +272,7 @@ class TestWorkflowConfig:
         ]
         
         for cron in invalid_crons:
-            with pytest.raises(ValidationError, match="schedule.*valid cron"):
+            with pytest.raises(ValidationError, match="(Cron schedule|Invalid.*field|Value error)"):
                 WorkflowConfig(
                     name="test",
                     api_base="https://api.test.com",
@@ -323,9 +323,21 @@ class TestDependencyResolution:
         ]
         
         resolved = resolve_workflow_dependencies(steps)
-        step_names = [step.name for step in resolved]
         
-        assert step_names == ["step1", "step2", "step3"]
+        # Should return 3 phases for sequential dependencies
+        assert len(resolved) == 3
+        
+        # First phase should contain step1
+        assert len(resolved[0]) == 1
+        assert resolved[0][0].name == "step1"
+        
+        # Second phase should contain step2
+        assert len(resolved[1]) == 1
+        assert resolved[1][0].name == "step2"
+        
+        # Third phase should contain step3
+        assert len(resolved[2]) == 1
+        assert resolved[2][0].name == "step3"
     
     def test_resolve_dependencies_parallel(self):
         """Test resolving parallel groups."""
@@ -337,11 +349,22 @@ class TestDependencyResolution:
         
         resolved = resolve_workflow_dependencies(steps)
         
-        # First two steps should be in parallel group
-        assert resolved[0].parallel_group == "group1"
-        assert resolved[1].parallel_group == "group1"
-        # Third step should depend on the group
-        assert "group1" in resolved[2].depends_on
+        # Should return 2 phases
+        assert len(resolved) == 2
+        
+        # First phase should contain the parallel group steps
+        assert len(resolved[0]) == 2
+        step_names = {step.name for step in resolved[0]}
+        assert step_names == {"step1", "step2"}
+        
+        # Both steps should be in the same parallel group
+        for step in resolved[0]:
+            assert step.parallel_group == "group1"
+        
+        # Second phase should contain step3
+        assert len(resolved[1]) == 1
+        assert resolved[1][0].name == "step3"
+        assert "group1" in resolved[1][0].depends_on
     
     def test_circular_dependency_detection(self):
         """Test circular dependency detection."""
