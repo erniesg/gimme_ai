@@ -36,6 +36,7 @@ from .commands_init import init_command
 from .commands_deploy import deploy_command
 from .commands_workflow import workflow_command
 from .commands_workflow_new import workflow_group
+from .commands_secrets import secrets_group
 from .commands_test import (
     test_command,
     test_auth_command,
@@ -170,6 +171,7 @@ cli.add_command(init_command)
 cli.add_command(deploy_command)
 cli.add_command(workflow_command)
 cli.add_command(workflow_group, name='wf')  # New workflow engine commands
+cli.add_command(secrets_group)  # Secrets management commands
 cli.add_command(test_command)
 cli.add_command(test_auth_command)
 cli.add_command(test_rate_limits_command)
