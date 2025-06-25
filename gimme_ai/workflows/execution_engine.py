@@ -7,8 +7,10 @@ from typing import Dict, Any, List, Optional, NamedTuple
 from dataclasses import dataclass
 from ..config.workflow import WorkflowConfig, StepConfig, resolve_workflow_dependencies
 from ..http.workflow_client import WorkflowHTTPClient
+from ..http.connection_manager import AsyncResourceManager, get_global_resource_manager
+from ..utils.security import get_secure_logger
 
-logger = logging.getLogger(__name__)
+logger = get_secure_logger(__name__)
 
 
 class ExecutionError(Exception):
@@ -50,16 +52,20 @@ class WorkflowExecutionResult:
 class WorkflowExecutionEngine:
     """Engine for executing workflows with dependency management."""
     
-    def __init__(self, http_client: WorkflowHTTPClient):
+    def __init__(self, 
+                 http_client: WorkflowHTTPClient,
+                 resource_manager: Optional[AsyncResourceManager] = None):
         """
         Initialize execution engine.
         
         Args:
             http_client: HTTP client for making API calls
+            resource_manager: Async resource manager (optional, uses global if None)
         """
         self.http_client = http_client
         self.execution_context: Dict[str, Any] = {}
         self.step_results: Dict[str, StepExecutionResult] = {}
+        self.resource_manager = resource_manager or get_global_resource_manager()
     
     async def execute_workflow(self, workflow: WorkflowConfig) -> WorkflowExecutionResult:
         """
@@ -240,7 +246,7 @@ class WorkflowExecutionEngine:
     
     async def _execute_parallel_steps(self, steps: List[StepConfig]) -> List[StepExecutionResult]:
         """
-        Execute multiple steps in parallel.
+        Execute multiple steps in parallel with proper resource management.
         
         Args:
             steps: List of steps to execute in parallel
@@ -255,9 +261,25 @@ class WorkflowExecutionEngine:
         for step in steps:
             task = asyncio.create_task(self._execute_step(step))
             tasks.append(task)
+            # Track task for cleanup
+            self.resource_manager.add_task(task)
         
-        # Wait for all tasks to complete
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        try:
+            # Wait for all tasks to complete with timeout protection
+            results = await asyncio.wait_for(
+                asyncio.gather(*tasks, return_exceptions=True),
+                timeout=300.0  # 5 minute overall timeout for parallel execution
+            )
+        except asyncio.TimeoutError:
+            # Cancel remaining tasks
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            
+            # Wait for cancellation to complete
+            await asyncio.gather(*tasks, return_exceptions=True)
+            
+            raise ExecutionError("Parallel execution timed out after 5 minutes")
         
         # Process results
         step_results = []
