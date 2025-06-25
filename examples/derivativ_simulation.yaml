@@ -1,0 +1,128 @@
+name: "derivativ_cambridge_igcse_daily"
+description: "Simulated Derivativ daily question generation workflow"
+schedule: "0 18 * * *"  # 2 AM Singapore Time (6 PM UTC)
+timezone: "Asia/Singapore"
+api_base: "https://httpbin.org"  # Mock endpoint for demo
+
+# Note: In production, this would be:
+# api_base: "https://api.derivativ.ai"
+# auth:
+#   type: "bearer"
+#   token: "${DERIVATIV_API_KEY}"
+
+variables:
+  topics: ["algebra", "geometry", "statistics", "calculus", "trigonometry", "probability"]
+  questions_per_topic: 8
+  grade_level: 9
+  detail_level: "medium"
+
+steps:
+  # Phase 1: Parallel question generation across topics
+  - name: "generate_algebra_questions"
+    endpoint: "/post"
+    method: "POST"
+    parallel_group: "question_generation"
+    payload_template: |
+      {
+        "endpoint": "/api/questions/generate",
+        "topic": "algebra",
+        "count": {{ questions_per_topic }},
+        "grade_level": {{ grade_level }},
+        "quality_threshold": 0.8
+      }
+    retry:
+      limit: 3
+      delay: "10s"
+      backoff: "exponential"
+      
+  - name: "generate_geometry_questions"
+    endpoint: "/post"
+    method: "POST"
+    parallel_group: "question_generation"
+    payload_template: |
+      {
+        "endpoint": "/api/questions/generate",
+        "topic": "geometry",
+        "count": {{ questions_per_topic }},
+        "grade_level": {{ grade_level }},
+        "quality_threshold": 0.8
+      }
+    retry:
+      limit: 3
+      delay: "10s"
+      backoff: "exponential"
+      
+  - name: "generate_statistics_questions"
+    endpoint: "/post"
+    method: "POST"
+    parallel_group: "question_generation"
+    payload_template: |
+      {
+        "endpoint": "/api/questions/generate",
+        "topic": "statistics",
+        "count": {{ questions_per_topic }},
+        "grade_level": {{ grade_level }},
+        "quality_threshold": 0.8
+      }
+    retry:
+      limit: 3
+      delay: "10s"
+      backoff: "exponential"
+      
+  # Phase 2: Document creation (depends on all questions)
+  - name: "create_worksheet"
+    endpoint: "/post"
+    method: "POST"
+    depends_on: ["question_generation"]
+    payload_template: |
+      {
+        "endpoint": "/api/documents/generate",
+        "document_type": "worksheet",
+        "detail_level": "{{ detail_level }}",
+        "include_solutions": false,
+        "metadata": {
+          "topics": {{ topics | tojson }},
+          "grade_level": {{ grade_level }},
+          "total_questions": {{ questions_per_topic * 3 }}
+        }
+      }
+    timeout: "5m"
+    
+  - name: "create_answer_key"
+    endpoint: "/post"
+    method: "POST"
+    depends_on: ["question_generation"]
+    payload_template: |
+      {
+        "endpoint": "/api/documents/generate",
+        "document_type": "answer_key",
+        "detail_level": "{{ detail_level }}",
+        "include_solutions": true,
+        "metadata": {
+          "topics": {{ topics | tojson }},
+          "grade_level": {{ grade_level }}
+        }
+      }
+    timeout: "5m"
+    
+  # Phase 3: Storage operations
+  - name: "store_documents"
+    endpoint: "/post"
+    method: "POST"
+    depends_on: ["create_worksheet", "create_answer_key"]
+    payload:
+      endpoint: "/api/documents/store"
+      create_dual_versions: true
+      metadata:
+        generation_date: "2024-12-25"
+        curriculum: "Cambridge IGCSE Mathematics"
+        automated: true
+    timeout: "2m"
+
+# Monitoring configuration for production
+monitoring:
+  webhook_url: "https://api.derivativ.ai/webhooks/workflow_complete"
+  alerts:
+    on_failure: true
+    on_long_duration: "30m"
+  logging_level: "INFO"

@@ -1,0 +1,17 @@
+name: "basic_api_workflow"
+description: "Example workflow showing basic API orchestration"
+api_base: "https://httpbin.org"
+
+steps:
+  - name: "get_data"
+    endpoint: "/json"
+    method: "GET"
+    
+  - name: "post_data"
+    endpoint: "/post"
+    method: "POST"
+    depends_on: ["get_data"]
+    payload:
+      message: "Hello from gimme_ai"
+      timestamp: "2024-12-25"
+      test: true

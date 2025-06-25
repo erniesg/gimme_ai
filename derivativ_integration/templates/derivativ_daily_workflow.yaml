@@ -1,0 +1,122 @@
+# Derivativ Daily Question Generation Workflow
+# Runs every day at 2 AM Singapore Time (6 PM UTC previous day)
+
+name: "derivativ_cambridge_igcse_daily"
+description: "Daily Cambridge IGCSE question generation for multiple topics"
+schedule: "0 18 * * *"  # 2 AM Singapore Time (6 PM UTC previous day)
+timezone: "Asia/Singapore"
+api_base: "{{ api_base_url }}"
+
+auth:
+  type: "bearer"
+  token: "{{ derivativ_api_key }}"
+
+variables:
+  topics: {{ topics | tojson }}
+  questions_per_topic: {{ questions_per_topic | default(8) }}
+  grade_level: {{ grade_level | default(9) }}
+  quality_threshold: {{ quality_threshold | default(0.75) }}
+  total_target: {{ (topics | length) * (questions_per_topic | default(8)) }}
+  request_id: "daily-{{ now().strftime('%Y%m%d') }}-{{ generate_uuid()[:8] }}"
+  workflow_date: "{{ now().strftime('%Y-%m-%d') }}"
+
+steps:
+  # Phase 1: Parallel Question Generation by Topic
+  {% for topic in topics %}
+  - name: "generate_{{ topic }}_questions"
+    description: "Generate {{ questions_per_topic | default(8) }} {{ topic }} questions"
+    endpoint: "/api/questions/generate"
+    method: "POST"
+    parallel_group: "question_generation"
+    retry:
+      limit: 3
+      delay: "10s"
+      backoff: "exponential"
+      timeout: "5m"
+    payload_template: |
+      {
+        "topic": "{{ topic }}",
+        "count": {{ questions_per_topic | default(8) }},
+        "grade_level": {{ grade_level | default(9) }},
+        "quality_threshold": {{ quality_threshold | default(0.75) }},
+        "request_id": "{{ request_id }}-{{ topic }}",
+        "workflow_date": "{{ workflow_date }}"
+      }
+    output_key: "{{ topic }}_results"
+  {% endfor %}
+
+  # Phase 2: Document Generation (depends on all question generation)
+  - name: "create_worksheet"
+    description: "Create student worksheet with all generated questions"
+    endpoint: "/api/documents/generate"
+    method: "POST"
+    depends_on: [{% for topic in topics %}"generate_{{ topic }}_questions"{% if not loop.last %}, {% endif %}{% endfor %}]
+    retry:
+      limit: 2
+      delay: "5s"
+      timeout: "10m"
+    payload_template: |
+      {
+        "document_type": "worksheet",
+        "question_ids": {{ steps | collect_question_ids | tojson }},
+        "detail_level": "medium",
+        "include_solutions": false,
+        "metadata": {
+          "generated_date": "{{ workflow_date }}",
+          "topics": {{ topics | tojson }},
+          "total_questions": {{ total_target }}
+        }
+      }
+    output_key: "worksheet_result"
+
+  - name: "create_answer_key"
+    description: "Create answer key with detailed solutions"
+    endpoint: "/api/documents/generate"
+    method: "POST"
+    depends_on: [{% for topic in topics %}"generate_{{ topic }}_questions"{% if not loop.last %}, {% endif %}{% endfor %}]
+    payload_template: |
+      {
+        "document_type": "answer_key",
+        "question_ids": {{ steps | collect_question_ids | tojson }},
+        "include_solutions": true,
+        "include_marking_schemes": true,
+        "metadata": {
+          "generated_date": "{{ workflow_date }}",
+          "topics": {{ topics | tojson }}
+        }
+      }
+    output_key: "answer_key_result"
+
+  # Phase 3: Storage and Export
+  - name: "store_documents"
+    description: "Store all generated documents with dual versions"
+    endpoint: "/api/documents/store"
+    method: "POST"
+    depends_on: ["create_worksheet", "create_answer_key"]
+    payload_template: |
+      {
+        "documents": [
+          {
+            "id": "worksheet-{{ workflow_date }}",
+            "type": "worksheet",
+            "formats": ["pdf", "docx", "html"]
+          },
+          {
+            "id": "answer-key-{{ workflow_date }}",
+            "type": "answer_key",
+            "formats": ["pdf", "docx"]
+          }
+        ],
+        "create_dual_versions": true,
+        "metadata": {
+          "workflow_id": "{{ request_id }}",
+          "generation_date": "{{ workflow_date }}",
+          "total_questions": {{ total_target }}
+        }
+      }
+
+monitoring:
+  webhook_url: "{{ webhook_url | default('https://api.derivativ.ai/webhooks/workflow_complete') }}"
+  alerts:
+    on_failure: true
+    on_long_duration: "30m"

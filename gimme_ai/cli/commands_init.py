@@ -129,8 +129,8 @@ def init_command(
             token = click.prompt(f"{cf_token_env}", hide_input=True)
             env_vars[cf_token_env] = token
 
-        # Create default configuration
-        config = create_default_config(project_name)
+        # Create default configuration (defaulting to cloudflare for better DX)
+        config = create_default_config(project_name, provider="cloudflare")
 
         # Required API keys for backend
         click.echo("\n📦 Required API keys for your backend:")

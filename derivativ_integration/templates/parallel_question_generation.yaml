@@ -1,0 +1,79 @@
+# Parallel Question Generation Template
+# Demonstrates parallel execution with dependency management
+
+name: "parallel_question_generation"
+description: "Generate multiple question types in parallel, then create combined document"
+api_base: "{{ api_base_url }}"
+
+auth:
+  type: "bearer"
+  token: "{{ api_key }}"
+
+variables:
+  question_types: {{ question_types | default(['algebra', 'geometry', 'statistics']) | tojson }}
+  questions_per_type: {{ questions_per_type | default(5) }}
+  grade_level: {{ grade_level | default(9) }}
+
+steps:
+  # Phase 1: Parallel question generation for different types
+  {% for qtype in question_types | default(['algebra', 'geometry', 'statistics']) %}
+  - name: "generate_{{ qtype }}"
+    description: "Generate {{ questions_per_type | default(5) }} {{ qtype }} questions"
+    endpoint: "/api/questions/generate"
+    method: "POST"
+    parallel_group: "question_generation"
+    max_parallel: 3  # Limit concurrent requests
+    retry:
+      limit: 3
+      delay: "10s"
+      backoff: "exponential"
+    payload_template: |
+      {
+        "type": "{{ qtype }}",
+        "count": {{ questions_per_type | default(5) }},
+        "grade_level": {{ grade_level | default(9) }},
+        "parallel_batch": true
+      }
+    output_key: "{{ qtype }}_questions"
+  {% endfor %}
+
+  # Phase 2: Combine results (depends on all parallel generation)
+  - name: "combine_questions"
+    description: "Combine all generated questions into single collection"
+    endpoint: "/api/questions/combine"
+    method: "POST"
+    depends_on: [{% for qtype in question_types | default(['algebra', 'geometry', 'statistics']) %}"generate_{{ qtype }}"{% if not loop.last %}, {% endif %}{% endfor %}]
+    payload_template: |
+      {
+        "question_sets": [
+          {% for qtype in question_types | default(['algebra', 'geometry', 'statistics']) %}
+          {
+            "type": "{{ qtype }}",
+            "questions": {{ ("steps.generate_" + qtype + ".result") }}
+          }{% if not loop.last %},{% endif %}
+          {% endfor %}
+        ],
+        "metadata": {
+          "total_types": {{ question_types | default(['algebra', 'geometry', 'statistics']) | length }},
+          "questions_per_type": {{ questions_per_type | default(5) }}
+        }
+      }
+
+  # Phase 3: Generate final document
+  - name: "create_document"
+    description: "Create final document from combined questions"
+    endpoint: "/api/documents/generate"
+    method: "POST"
+    depends_on: ["combine_questions"]
+    payload_template: |
+      {
+        "document_type": "mixed_topic_worksheet",
+        "question_collection": {{ steps.combine_questions.result }},
+        "format": "pdf",
+        "include_answer_key": true
+      }
+
+monitoring:
+  alerts:
+    on_failure: true
+    on_long_duration: "15m"

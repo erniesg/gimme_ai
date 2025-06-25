@@ -1,0 +1,265 @@
+name: "tiktok_content_pipeline"
+description: "Complex multi-API workflow for TikTok content generation"
+api_base: "https://api.openai.com"  # Primary API base
+
+variables:
+  script_topic: "sustainable living tips"
+  voice_id: "21m00Tcm4TlvDq8ikWAM"  # ElevenLabs voice ID
+  image_style: "modern minimalist infographic"
+
+steps:
+  # Step 1: Generate initial script idea
+  - name: "generate_script_outline"
+    endpoint: "/v1/chat/completions"
+    method: "POST"
+    auth:
+      type: "bearer"
+      token: "${OPENAI_API_KEY}"
+    headers:
+      Content-Type: "application/json"
+    payload_template: |
+      {
+        "model": "gpt-4",
+        "messages": [
+          {
+            "role": "system",
+            "content": "You are a TikTok content creator specializing in engaging short-form videos. Create compelling, educational content that hooks viewers immediately."
+          },
+          {
+            "role": "user", 
+            "content": "Create a 60-second TikTok script about {{ script_topic }}. Include a hook, 3 main points, and a call-to-action. Format as a structured script with timing."
+          }
+        ],
+        "max_tokens": 500,
+        "temperature": 0.7
+      }
+    extract_fields:
+      script_outline: "choices.0.message.content"
+    timeout: "30s"
+    
+  # Step 2: Refine script for maximum engagement
+  - name: "enhance_script"
+    endpoint: "/v1/chat/completions" 
+    method: "POST"
+    depends_on: ["generate_script_outline"]
+    headers:
+      Content-Type: "application/json"
+    payload_template: |
+      {
+        "model": "gpt-4",
+        "messages": [
+          {
+            "role": "system",
+            "content": "You are a viral content specialist. Optimize scripts for maximum engagement, retention, and shareability on TikTok."
+          },
+          {
+            "role": "user",
+            "content": "Enhance this TikTok script for viral potential. Add emotional hooks, trending phrases, and ensure it's perfectly timed for 60 seconds:\\n\\n{{ generate_script_outline.script_outline }}"
+          }
+        ],
+        "max_tokens": 600,
+        "temperature": 0.8
+      }
+    extract_fields:
+      final_script: "choices.0.message.content"
+    store_in_r2: true
+    r2_bucket: "tiktok-assets"
+    r2_key_template: "scripts/{{ name }}_{{ script_topic | replace(' ', '_') }}.txt"
+    timeout: "30s"
+
+  # Step 3: Generate voiceover (parallel with image generation)
+  - name: "generate_voiceover"
+    api_base: "https://api.elevenlabs.io"
+    endpoint: "/v1/text-to-speech/{{ voice_id }}"
+    method: "POST"
+    auth:
+      type: "api_key"
+      header_name: "xi-api-key"
+      api_key: "${ELEVENLABS_API_KEY}"
+    depends_on: ["enhance_script"]
+    parallel_group: "content_generation"
+    headers:
+      Content-Type: "application/json"
+    payload_template: |
+      {
+        "text": "{{ enhance_script.final_script }}",
+        "model_id": "eleven_multilingual_v2",
+        "voice_settings": {
+          "stability": 0.7,
+          "similarity_boost": 0.8,
+          "style": 0.2
+        }
+      }
+    download_response: true
+    store_in_r2: true
+    r2_bucket: "tiktok-assets"
+    r2_key_template: "audio/{{ name }}_voiceover.mp3"
+    timeout: "2m"
+
+  # Step 4: Generate visual content (parallel with voiceover)
+  - name: "generate_image"
+    api_base: "https://api.replicate.com"
+    endpoint: "/v1/predictions"
+    method: "POST"
+    auth:
+      type: "api_key"
+      header_name: "Authorization"
+      api_key: "Token ${REPLICATE_API_TOKEN}"
+    depends_on: ["enhance_script"]
+    parallel_group: "content_generation"
+    headers:
+      Content-Type: "application/json"
+    payload_template: |
+      {
+        "version": "ac732df83cea7fff18b8472768c88ad041fa750ff7682a21affe81863cbe77e4",
+        "input": {
+          "prompt": "{{ image_style }} illustration representing {{ script_topic }}, high quality, vibrant colors, TikTok-ready vertical format",
+          "num_outputs": 1,
+          "aspect_ratio": "9:16",
+          "output_format": "png",
+          "output_quality": 90
+        }
+      }
+    poll_for_completion: true
+    poll_interval: "5s"
+    poll_timeout: "10m"
+    completion_field: "status"
+    completion_values: ["succeeded"]
+    result_field: "output.0"
+    extract_fields:
+      image_url: "output.0"
+    download_response: true
+    store_in_r2: true
+    r2_bucket: "tiktok-assets"
+    r2_key_template: "images/{{ name }}_visual.png"
+    timeout: "15m"
+    
+  # Step 5: Create Ken Burns effect video (depends on image)
+  - name: "create_ken_burns_video"
+    api_base: "https://api.runwayml.com"  # Example Ken Burns API
+    endpoint: "/v1/image-to-video"
+    method: "POST"
+    auth:
+      type: "bearer"
+      token: "${RUNWAY_API_KEY}"
+    depends_on: ["generate_image"]
+    headers:
+      Content-Type: "application/json"
+    payload_template: |
+      {
+        "image_url": "{{ generate_image.image_url }}",
+        "duration": 60,
+        "effect": "ken_burns",
+        "zoom_factor": 1.2,
+        "pan_direction": "random",
+        "output_format": "mp4"
+      }
+    poll_for_completion: true
+    poll_interval: "10s"
+    poll_timeout: "15m"
+    completion_field: "status"
+    completion_values: ["completed"]
+    result_field: "video_url"
+    extract_fields:
+      video_url: "video_url"
+    download_response: true
+    store_in_r2: true
+    r2_bucket: "tiktok-assets"
+    r2_key_template: "videos/{{ name }}_visual.mp4"
+    timeout: "20m"
+
+  # Step 6: Combine audio and video (depends on both)
+  - name: "combine_audio_video"
+    api_base: "https://api.assemblyai.com"  # Example video editing API
+    endpoint: "/v2/video/combine"
+    method: "POST"
+    auth:
+      type: "bearer"
+      token: "${ASSEMBLY_API_KEY}"
+    depends_on: ["generate_voiceover", "create_ken_burns_video"]
+    headers:
+      Content-Type: "application/json"
+    payload_template: |
+      {
+        "video_url": "{{ create_ken_burns_video.video_url }}",
+        "audio_url": "{{ generate_voiceover.r2_url }}",
+        "output_format": "mp4",
+        "quality": "high",
+        "resolution": "1080x1920",
+        "fps": 30,
+        "audio_sync": true
+      }
+    poll_for_completion: true
+    poll_interval: "15s" 
+    poll_timeout: "20m"
+    completion_field: "status"
+    completion_values: ["completed"]
+    result_field: "download_url"
+    extract_fields:
+      final_video_url: "download_url"
+    download_response: true
+    store_in_r2: true
+    r2_bucket: "tiktok-assets"
+    r2_key_template: "final/{{ name }}_tiktok_final.mp4"
+    timeout: "25m"
+
+  # Step 7: Generate metadata and thumbnail
+  - name: "generate_metadata"
+    api_base: "https://api.openai.com"
+    endpoint: "/v1/chat/completions"
+    method: "POST"
+    depends_on: ["combine_audio_video"]
+    headers:
+      Content-Type: "application/json"
+    payload_template: |
+      {
+        "model": "gpt-4",
+        "messages": [
+          {
+            "role": "system",
+            "content": "Generate TikTok metadata including hashtags, caption, and posting recommendations."
+          },
+          {
+            "role": "user",
+            "content": "Create TikTok metadata for this video about {{ script_topic }}. Script: {{ enhance_script.final_script }}\\n\\nProvide: 1) Engaging caption (max 150 chars), 2) 10 relevant hashtags, 3) Best posting time recommendation, 4) Target audience description."
+          }
+        ],
+        "max_tokens": 300
+      }
+    extract_fields:
+      metadata: "choices.0.message.content"
+    store_in_r2: true
+    r2_bucket: "tiktok-assets"
+    r2_key_template: "metadata/{{ name }}_metadata.json"
+    response_transform: |
+      {
+        "final_video_url": "{{ combine_audio_video.final_video_url }}",
+        "script": "{{ enhance_script.final_script }}",
+        "metadata": "{{ response.metadata }}",
+        "assets": {
+          "script_file": "{{ enhance_script.r2_url }}",
+          "audio_file": "{{ generate_voiceover.r2_url }}",
+          "image_file": "{{ generate_image.r2_url }}",
+          "video_file": "{{ create_ken_burns_video.r2_url }}",
+          "final_video": "{{ combine_audio_video.r2_url }}"
+        },
+        "workflow_completed_at": "{{ now() }}",
+        "topic": "{{ script_topic }}"
+      }
+
+# Monitoring and logging
+monitoring:
+  webhook_url: "https://api.yourapp.com/webhooks/tiktok_workflow_complete"
+  alerts:
+    on_failure: true
+    on_long_duration: "45m"
+  logging_level: "INFO"
+
+# Required environment variables:
+# OPENAI_API_KEY - OpenAI API key
+# ELEVENLABS_API_KEY - ElevenLabs API key  
+# REPLICATE_API_TOKEN - Replicate API token
+# RUNWAY_API_KEY - Runway ML API key
+# ASSEMBLY_API_KEY - Assembly AI API key
+# R2_ACCESS_KEY_ID - Cloudflare R2 access key
+# R2_SECRET_ACCESS_KEY - Cloudflare R2 secret key

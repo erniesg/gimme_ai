@@ -1,0 +1,38 @@
+# Simple API Test Workflow Template
+# Use this for testing basic API connectivity and authentication
+
+name: "{{ workflow_name | default('simple_api_test') }}"
+description: "Simple API workflow for testing connectivity and authentication"
+api_base: "{{ api_base_url }}"
+
+{% if auth_token %}
+auth:
+  type: "bearer"
+  token: "{{ auth_token }}"
+{% endif %}
+
+variables:
+  test_data: {{ test_data | default('{"test": true}') | tojson }}
+  request_id: "{{ generate_uuid() }}"
+  timestamp: "{{ now().isoformat() }}"
+
+steps:
+  - name: "test_connectivity"
+    description: "Test basic API endpoint connectivity"
+    endpoint: "{{ test_endpoint | default('/api/test') }}"
+    method: "{{ http_method | default('POST') }}"
+    payload_template: |
+      {
+        "request_id": "{{ request_id }}",
+        "test_data": {{ test_data | tojson }},
+        "timestamp": "{{ timestamp }}"
+      }
+    retry:
+      limit: {{ retry_limit | default(2) }}
+      delay: "{{ retry_delay | default('5s') }}"
+      backoff: "{{ retry_backoff | default('exponential') }}"
+
+monitoring:
+  webhook_url: "{{ webhook_url | default('') }}"
+  alerts:
+    on_failure: true

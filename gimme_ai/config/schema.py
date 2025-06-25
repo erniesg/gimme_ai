@@ -126,25 +126,43 @@ class GimmeConfig(BaseModel):
         return cls.from_dict(data)
 
 
-def create_default_config(project_name: str) -> Dict[str, Any]:
+def create_default_config(project_name: str, provider: str = "cloudflare") -> Dict[str, Any]:
     """Create a default configuration dictionary with sensible defaults.
 
     Args:
         project_name: Name of the project, used for endpoints and deployment
+        provider: Deployment provider ("cloudflare", "modal", "custom")
 
     Returns:
         Dictionary containing the default configuration
     """
     # Sanitize project name for use in URLs and identifiers
     safe_project_name = project_name.lower().replace('_', '-').replace(' ', '-')
+    
+    # Provider-specific configuration
+    if provider == "modal":
+        endpoints = {
+            "dev": "http://localhost:8000",
+            "prod": f"https://{safe_project_name}.modal.run"
+        }
+        required_keys = ["MODAL_TOKEN_ID", "MODAL_TOKEN_SECRET"]
+    elif provider == "cloudflare":
+        endpoints = {
+            "dev": "http://localhost:8080",
+            "prod": f"https://{safe_project_name}.workers.dev"
+        }
+        required_keys = []  # Cloudflare uses API token for deployment, not runtime
+    else:  # custom
+        endpoints = {
+            "dev": "http://localhost:8000",
+            "prod": f"https://{safe_project_name}.example.com"
+        }
+        required_keys = []
 
     return {
         "project_name": safe_project_name,
         "output_dir": f"output/{safe_project_name}",  # Consistent output directory
-        "endpoints": {
-            "dev": "http://localhost:8000",  # Default local development endpoint
-            "prod": f"https://{safe_project_name}.modal.run"  # Default production endpoint using project name
-        },
+        "endpoints": endpoints,
         "limits": {
             "free_tier": {
                 "per_ip": 10,
@@ -152,10 +170,7 @@ def create_default_config(project_name: str) -> Dict[str, Any]:
                 "rate_window": "lifetime"
             }
         },
-        "required_keys": [
-            "MODAL_TOKEN_ID",
-            "MODAL_TOKEN_SECRET"
-        ],
+        "required_keys": required_keys,
         "admin_password_env": "GIMME_ADMIN_PASSWORD",
         "cors": {
             "allowed_origins": ["*"],  # Default to allow all origins

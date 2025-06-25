@@ -1,0 +1,51 @@
+name: "parallel_generation_workflow"
+description: "Example showing parallel execution with dependencies"
+api_base: "https://httpbin.org"
+
+variables:
+  project_name: "gimme_ai_test"
+  batch_size: 3
+
+steps:
+  # Parallel data generation
+  - name: "generate_dataset_1"
+    endpoint: "/post"
+    method: "POST"
+    parallel_group: "data_generation"
+    payload_template: |
+      {
+        "dataset": "dataset_1",
+        "project": "{{ project_name }}",
+        "size": {{ batch_size }}
+      }
+    
+  - name: "generate_dataset_2"
+    endpoint: "/post"
+    method: "POST"
+    parallel_group: "data_generation"
+    payload_template: |
+      {
+        "dataset": "dataset_2", 
+        "project": "{{ project_name }}",
+        "size": {{ batch_size }}
+      }
+      
+  - name: "generate_dataset_3"
+    endpoint: "/post"
+    method: "POST"
+    parallel_group: "data_generation"
+    payload_template: |
+      {
+        "dataset": "dataset_3",
+        "project": "{{ project_name }}",
+        "size": {{ batch_size }}
+      }
+  
+  # Compile results (depends on all parallel generation)
+  - name: "compile_results"
+    endpoint: "/post"
+    method: "POST"
+    depends_on: ["data_generation"]
+    payload:
+      action: "compile"
+      note: "All datasets generated successfully"

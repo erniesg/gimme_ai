@@ -1,0 +1,133 @@
+name: "live_multi_api_workflow"
+description: "Real multi-API workflow with OpenAI, JSONPlaceholder, and file handling"
+api_base: "https://api.openai.com"
+
+variables:
+  user_id: 1
+  topic: "artificial intelligence trends"
+
+steps:
+  # Step 1: Generate content with OpenAI
+  - name: "generate_content"
+    endpoint: "/v1/chat/completions"
+    method: "POST"
+    auth:
+      type: "bearer"
+      token: "${OPENAI_API_KEY}"
+    headers:
+      Content-Type: "application/json"
+    payload_template: |
+      {
+        "model": "gpt-3.5-turbo",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Write a brief 100-word summary about {{ topic }} for a technical blog post."
+          }
+        ],
+        "max_tokens": 150,
+        "temperature": 0.7
+      }
+    extract_fields:
+      content: "choices.0.message.content"
+      usage_tokens: "usage.total_tokens"
+    timeout: "30s"
+
+  # Step 2: Get user data (parallel with content generation)
+  - name: "fetch_user_data"
+    api_base: "https://jsonplaceholder.typicode.com"
+    endpoint: "/users/{{ user_id }}"
+    method: "GET"
+    parallel_group: "data_fetch"
+    extract_fields:
+      username: "username"
+      email: "email"
+      company: "company.name"
+
+  # Step 3: Get related posts (parallel with user data)
+  - name: "fetch_related_posts"
+    api_base: "https://jsonplaceholder.typicode.com"
+    endpoint: "/posts"
+    method: "GET"
+    parallel_group: "data_fetch"
+    extract_fields:
+      post_count: "length"
+      first_post_title: "0.title"
+
+  # Step 4: Create a summary post (depends on all previous steps)
+  - name: "create_summary"
+    api_base: "https://api.openai.com"
+    endpoint: "/v1/chat/completions"
+    method: "POST"
+    depends_on: ["generate_content", "data_fetch"]
+    headers:
+      Content-Type: "application/json"
+    payload_template: |
+      {
+        "model": "gpt-3.5-turbo",
+        "messages": [
+          {
+            "role": "system",
+            "content": "You are a content curator creating personalized summaries."
+          },
+          {
+            "role": "user",
+            "content": "Create a personalized summary for user {{ fetch_user_data.username }} from {{ fetch_user_data.company }}. Topic: {{ topic }}\\n\\nGenerated content: {{ generate_content.content }}\\n\\nContext: This user has {{ fetch_related_posts.post_count }} posts. Make it engaging and relevant to their professional background."
+          }
+        ],
+        "max_tokens": 200
+      }
+    extract_fields:
+      personalized_summary: "choices.0.message.content"
+      final_tokens: "usage.total_tokens"
+
+  # Step 5: Simulate saving to storage/database
+  - name: "save_to_storage"
+    api_base: "https://jsonplaceholder.typicode.com"
+    endpoint: "/posts"
+    method: "POST"
+    depends_on: ["create_summary"]
+    headers:
+      Content-Type: "application/json"
+    payload_template: |
+      {
+        "action": "save_content",
+        "data": {
+          "user_id": {{ user_id }},
+          "username": "{{ fetch_user_data.username }}",
+          "company": "{{ fetch_user_data.company }}",
+          "topic": "{{ topic }}",
+          "original_content": "{{ generate_content.content }}",
+          "personalized_summary": "{{ create_summary.personalized_summary }}",
+          "token_usage": {
+            "content_generation": {{ generate_content.usage_tokens }},
+            "summary_creation": {{ create_summary.final_tokens }},
+            "total": {{ generate_content.usage_tokens + create_summary.final_tokens }}
+          },
+          "related_posts_count": {{ fetch_related_posts.post_count }},
+          "timestamp": "{{ now() }}"
+        }
+      }
+    response_transform: |
+      {
+        "workflow_success": true,
+        "saved_data": {{ response.json }},
+        "summary": {
+          "user": "{{ fetch_user_data.username }}",
+          "topic": "{{ topic }}",
+          "content_generated": true,
+          "personalized": true,
+          "total_tokens_used": {{ generate_content.usage_tokens + create_summary.final_tokens }}
+        }
+      }
+
+# This workflow demonstrates:
+# 1. OpenAI API integration with real auth
+# 2. Parallel data fetching from free APIs
+# 3. Complex dependency chains
+# 4. Field extraction from different response formats
+# 5. Template-based payload generation using previous step data
+# 6. Response transformation for final output
+# 7. Token usage tracking across multiple AI calls
+
+# To run: Set OPENAI_API_KEY environment variable
