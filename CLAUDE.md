@@ -15,13 +15,27 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ### CLI Commands
 The project provides a CLI tool accessible via `gimme-ai` (after poetry install) or `poetry run gimme-ai`:
 
+**Core Commands:**
 - **Initialize project**: `gimme-ai init`
 - **Deploy to Cloudflare**: `gimme-ai deploy`
+- **Validate config**: `gimme-ai validate`
+
+**Testing Commands:**
 - **Run all tests**: `gimme-ai test-all [URL]`
 - **Test authentication**: `gimme-ai test-auth [URL]`
 - **Test rate limits**: `gimme-ai test-rate-limits [URL]`
 - **Test workflows**: `gimme-ai test-workflow [URL]`
-- **Validate config**: `gimme-ai validate`
+
+**NEW: Advanced Workflow Engine (`gimme-ai wf`):**
+- **Create workflow**: `gimme-ai wf init --name my-workflow --template content-creation`
+- **Execute workflow**: `gimme-ai wf execute workflow.yaml --env-file .env`
+- **Validate workflow**: `gimme-ai wf validate workflow.yaml`
+- **Dry run**: `gimme-ai wf execute workflow.yaml --dry-run`
+
+**NEW: Secrets Management (`gimme-ai secrets`):**
+- **Create template**: `gimme-ai secrets template --environment development`
+- **Validate secrets**: `gimme-ai secrets validate --env-file .env.development`
+- **Sync to Cloudflare**: `gimme-ai secrets sync-cloudflare --environment production`
 
 ### JavaScript Dependencies
 - **Install JS dependencies**: `npm install` (for Hono framework used in Cloudflare Workers)
@@ -35,12 +49,25 @@ The project provides a CLI tool accessible via `gimme-ai` (after poetry install)
 - `commands_init.py`: Project initialization and configuration setup
 - `commands_deploy.py`: Cloudflare deployment functionality  
 - `commands_test.py`: Testing commands for deployed services
-- `commands_workflow.py`: Workflow management commands
+- `commands_workflow.py`: Legacy workflow commands
+- `commands_workflow_new.py`: Advanced workflow engine (NEW)
+- `commands_secrets.py`: Secrets management system (NEW)
 
 **Configuration Management** (`gimme_ai/config/`):
 - `schema.py`: Pydantic models for configuration validation
-- Supports rate limiting, API endpoints, workflow configs
+- `workflow.py`: Advanced workflow configuration models (NEW)
+- `secrets.py`: Multi-backend secrets management (NEW)
+- `derivativ_templates.py`: Cambridge IGCSE workflow templates (NEW)
 - Uses `.gimme-config.json` for project settings
+
+**Workflow System** (`gimme_ai/workflows/` + `gimme_ai/http/`):
+- `execution_engine.py`: Workflow orchestration with dependency management (NEW)
+- `workflow_client.py`: Multi-auth HTTP client with file operations (NEW)
+- `r2_client.py`: Cloudflare R2 storage integration (NEW)
+
+**Utilities** (`gimme_ai/utils/`):
+- `environment.py`: Environment variable management
+- `singapore_scheduler.py`: SGT to UTC timezone conversion (NEW)
 
 **Deployment System** (`gimme_ai/deploy/`):
 - `cloudflare.py`: Cloudflare Workers deployment logic

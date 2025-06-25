@@ -351,6 +351,55 @@ gimme-ai wf execute daily-workflow.yaml --environment production
 
 ---
 
+## 🚨 **Troubleshooting**
+
+### Common Issues
+
+1. **API Key Errors**
+   ```
+   ❌ 401 Unauthorized
+   ✅ Check your API key format and permissions
+   ```
+
+2. **Polling Timeouts**
+   ```yaml
+   poll_timeout: "20m"  # Increase for slow image generation
+   poll_interval: "10s" # Decrease for faster checking
+   ```
+
+3. **Response Parsing**
+   ```yaml
+   # If extraction fails, get raw response first
+   extract_fields: {}  # Empty = return full response
+   ```
+
+4. **Rate Limits**
+   ```yaml
+   retry:
+     limit: 5
+     delay: "30s"
+     backoff: "exponential"
+   ```
+
+### Debug Mode
+```python
+import logging
+logging.basicConfig(level=logging.DEBUG)
+
+# This will show all HTTP requests/responses
+result = await engine.execute_workflow(workflow)
+```
+
+### Performance Tips
+
+1. **Use Parallel Groups** for independent operations
+2. **Set Appropriate Timeouts** for each step type
+3. **Store Large Files in R2** instead of passing between steps
+4. **Extract Only Needed Fields** to reduce memory usage
+5. **Use Polling** for long-running jobs (>30s)
+
+---
+
 ## ✅ **Verification Checklist**
 
 Run these commands to verify your setup:
