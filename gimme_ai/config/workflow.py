@@ -194,12 +194,25 @@ class StepConfig(BaseModel):
             raise ValueError("Endpoint must start with '/'")
         return v
     
+    @field_validator('poll_interval')
+    def validate_poll_interval(cls, v):
+        """Validate polling interval format."""
+        if not re.match(r'^\d+[smh]$', v):
+            raise ValueError("Poll interval must be in format '5s', '1m', or '2h'")
+        return v
+    
+    @field_validator('poll_timeout')
+    def validate_poll_timeout(cls, v):
+        """Validate polling timeout format."""
+        if not re.match(r'^\d+[smh]$', v):
+            raise ValueError("Poll timeout must be in format '5s', '1m', or '2h'")
+        return v
+    
     @field_validator('timeout')
     def validate_timeout(cls, v):
-        """Validate timeout format."""
+        """Validate step timeout format."""
         if v is None:
             return v
-        
         if not re.match(r'^\d+[smh]$', v):
             raise ValueError("Timeout must be in format '5s', '1m', or '2h'")
         return v
